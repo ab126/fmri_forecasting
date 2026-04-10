@@ -1,0 +1,73 @@
+========================================================================
+🧠 fMRI BOLD SIGNAL FORECASTING - LSTM MODEL API (v1.0)
+========================================================================
+
+This package allows you to perform future value prediction on fMRI data 
+using a pre-trained LSTM model. The model contains the "Champion Fold" 
+parameters, which achieved the highest performance during 
+Leave-One-Subject-Out Cross-Validation (LOSO-CV).
+
+------------------------------------------------------------------------
+📦 PACKAGE CONTENTS
+------------------------------------------------------------------------
+1. best_fmri_sklearn_api.joblib : Trained model weights and settings.
+2. model_library.py             : Model architecture and API classes (Required).
+3. usage_example.py             : Sample code for running predictions.
+
+Note: 'model_library.py', the '.joblib' file, and your script MUST be 
+located in the same directory for the model to load correctly.
+
+------------------------------------------------------------------------
+📊 DATA PREPARATION (CRITICAL!)
+------------------------------------------------------------------------
+To ensure accurate predictions, your input data must adhere to these 
+standards:
+
+1. INPUT SHAPE:
+   The model expects exactly 50 seconds of history (M=50) for 19 brain 
+   regions (ROIs).
+   Input Matrix Shape: (Batch_Size, 50, 19)
+
+2. NORMALIZATION (Z-Score):
+   The model is not designed for raw signals. You MUST normalize your 
+   data before feeding it into the model using the following formula:
+   
+   $$Z = \frac{X - \mu}{\sigma + 1e-8}$$
+
+   Providing unnormalized data will result in mathematically 
+   insignificant or "garbage" predictions.
+
+------------------------------------------------------------------------
+🚀 QUICK USAGE EXAMPLE
+------------------------------------------------------------------------
+import joblib
+import numpy as np
+from model_library import AdvancedLSTM, FmriPredictorAPI
+
+# 1. Load the packaged model
+model = joblib.load("best_fmri_sklearn_api.joblib")
+
+# 2. Prepare your data (Example: 1 window of 50 seconds for 19 ROIs)
+# Ensure your real data is Z-score normalized!
+my_data = np.random.randn(1, 50, 19) 
+
+# 3. Predict
+# Output: Forecast for the next 5 seconds (H=5) -> Shape: (1, 5, 19)
+predictions = model.predict(my_data)
+
+print("Inference completed successfully.")
+print(f"Forecast for the next 5 steps: {predictions}")
+
+------------------------------------------------------------------------
+⚠️ IMPORTANT NOTES
+------------------------------------------------------------------------
+- The model was tested on subjects it had never seen during training 
+  (Subject-level independence).
+- When predicting the next 3 seconds, it captures trends and dynamics 
+  significantly better than a Naive (persistence) Baseline.
+- If you encounter issues, verify that your 'M' (lookback) is 50 and 
+  'H' (horizon) is 3.
+
+========================================================================
+
+========================================================================
