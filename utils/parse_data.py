@@ -1,7 +1,3 @@
-# =========================
-# STEP 1: IMPORTS
-# =========================
-
 import os, time
 from pathlib import Path
 
@@ -18,7 +14,7 @@ from tqdm.auto import tqdm
 
 
 # =========================
-# STEP 2: OPTIMIZED DATA LOADING FUNCTIONS
+# OPTIMIZED DATA LOADING FUNCTIONS
 # (Fixed ROI schema, no repeated schema search)
 # =========================
 
@@ -131,7 +127,7 @@ def normalize_items(items, eps=1e-8):
     return normalized
 
 
-def build_multi_step_windows(data_list, M, H, stride=1):
+def build_sliding_windows(data_list, M, H, stride=1):
     """
     Convert time series into supervised learning windows.
 
@@ -193,18 +189,17 @@ def split_by_subject(dataset, test_ratio=0.2, test_subjects=None, random_state=4
 
     return train_items, test_items
 
+# TODO: split_within_subjects() - within-subject forecasting
 
-def load_parse_dataset():
+
+def load_dataset_main():
     """ Load the dataset given in session/run.npz organization"""
 
     # Source path on Google Drive
-    data_dir = Path("..") / "data" # "/content/drive/MyDrive/PROJE_FMRI/Copy of pooled_stratified_share/pooled_stratified_share"
+    data_dir = Path("data")
 
-    # Local path in Colab runtime
-    local_root_dir = data_dir / "pooled_stratified_share" #"/content/pooled_stratified_share"
-
-    # Use local dataset path
-    root_dir = local_root_dir
+    # Local path 
+    root_dir = data_dir / "pooled_stratified_share" 
 
     if not os.path.exists(root_dir):
         raise ValueError(f"ERROR: Dataset folder not found: {root_dir}")
@@ -221,4 +216,13 @@ def load_parse_dataset():
     print(f"Successfully loaded runs: {len(dataset)}")
     print(f"Loading time: {end_load - start_load:.2f} seconds")
 
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"Device: {device}")
+
+    return dataset, device
+
+
+
+    
 
