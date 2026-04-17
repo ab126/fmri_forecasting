@@ -2,25 +2,8 @@ import torch
 import torch.nn as nn
 import numpy as np
 from sklearn.base import BaseEstimator, RegressorMixin
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import DataLoader
 
-
-class FMRIWindowDataset(Dataset):
-    """PyTorch dataset for fMRI windowed sequences."""
-
-    def __init__(self, X, Y=None):
-        self.X = torch.tensor(X, dtype=torch.float32)
-        self.Y = None
-        if Y is not None:
-          self.Y = torch.tensor(Y, dtype=torch.float32)
-
-    def __len__(self):
-        return len(self.X)
-
-    def __getitem__(self, idx):
-        if self.Y is not None:
-          return self.X[idx], self.Y[idx]
-        return self.X[idx]
 
 class AdvancedLSTM(nn.Module):
     """
@@ -112,3 +95,5 @@ def alstm_model_generator(n_roi, H):
             hidden_size=512,
             dropout=0.5
         )
+
+
