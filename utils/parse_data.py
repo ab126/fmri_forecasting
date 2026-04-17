@@ -155,7 +155,7 @@ def build_sliding_windows(data_list, M, H, stride=1):
     return np.array(X, dtype=np.float32), np.array(Y, dtype=np.float32)
 
 
-def split_by_subject(dataset, test_ratio=0.2, test_subjects=None, random_state=42):
+def split_by_subject(dataset, test_ratio=0.2, test_subjects=None, random_state=42, verebose=True):
     """
     Flexible subject split.
 
@@ -181,11 +181,12 @@ def split_by_subject(dataset, test_ratio=0.2, test_subjects=None, random_state=4
 
     train_items = [item for item in dataset if item["subject"] in train_subjects]
     test_items = [item for item in dataset if item["subject"] in test_subjects]
-
-    print(f"Train subjects: {train_subjects}")
-    print(f"Test subjects : {test_subjects}")
-    print(f"Train runs: {len(train_items)}")
-    print(f"Test runs : {len(test_items)}")
+    
+    if verebose:
+        print(f"Train subjects: {train_subjects}")
+        print(f"Test subjects : {test_subjects}")
+        print(f"Train runs: {len(train_items)}")
+        print(f"Test runs : {len(test_items)}")
 
     return train_items, test_items
 
@@ -222,7 +223,38 @@ def load_dataset_main():
 
     return dataset, device
 
+def parse_dataset(M=50, H=3, normalize=True, stride=1, test_ratio=0.2, test_subjects=None, random_state=42, verbose=True):
+    """
+    Main function to load, normalize, window, and split the dataset.
+    Returns:
+        X_train, Y_train: Training windows
+        X_test, Y_test: Testing windows
+        device: torch device for model training
+    """
+    dataset, device = load_dataset_main()
 
+    if normalize:
+        if verbose:
+            print("Normalizing dataset...")
+        normalized_data = normalize_items(dataset)
+    else:
+        normalized_data = dataset
+
+    if verbose:
+        print("Building sliding windows...")
+    X, Y = build_sliding_windows(normalized_data, M, H, stride)
+
+    if verbose:
+        print("Splitting by subject...")
+    train_items, test_items = split_by_subject(normalized_data, test_ratio, test_subjects, random_state)
+
+    X_train, Y_train = build_sliding_windows(train_items, M, H, stride)
+    X_test, Y_test = build_sliding_windows(test_items, M, H, stride)
+
+    if verbose:
+        print(f"Final shapes - Train: {X_train.shape}, {Y_train.shape} | Test: {X_test.shape}, {Y_test.shape}")
+
+    return X_train, Y_train, X_test, Y_test, device
 
     
 
