@@ -1,0 +1,101 @@
+fMRI BOLD Signal Forecasting – Linear Regression Model API
+
+This package provides a simple way to generate one-step-ahead predictions for fMRI time series using a trained linear regression model (Ridge regression). The model has already been trained and packaged, so you do not need to retrain anything. You can load it directly and run predictions on your own data.
+
+Files included
+
+- best_linear_api.joblib  
+  This is the main file you will use. It contains the trained model, scaler, and API wrapper all bundled together.
+
+- linear_api_library.py  
+  This file defines the API class. It must be in the same directory when you load the joblib file.
+
+- Linear_Regression_Method.ipynb  
+  The original training notebook. This is only for reference and is not required for inference.
+
+- User_Guide.txt  
+  This file.
+
+Basic idea
+
+The model takes a short window of past fMRI signals and predicts the next time point for all regions of interest (ROIs). It is a linear regression model (Ridge), not a neural network.
+
+Expected input
+
+Your input should be a NumPy array with shape:
+
+    (N, 30, 18)
+
+where:
+- N is the number of samples (windows)
+- 30 is the number of past time steps (history length)
+- 18 is the number of ROIs
+
+Each sample should represent a continuous window of 30 time points.
+
+The API will automatically reshape the input into a flattened format before applying the model.
+
+Outputs
+
+1. model.predict(X)
+
+Returns an array of shape:
+
+    (N, 18)
+
+This is the predicted next time point for each ROI.
+
+2. model.predict_proba(X)
+
+Returns a dictionary:
+
+    {
+        "mean": (N, 18),
+        "std": (N, 18)
+    }
+
+This is not classification probability. Instead:
+- "mean" is the predicted value
+- "std" is an uncertainty estimate based on training residuals
+
+How to use
+
+Example:
+
+import joblib
+import numpy as np
+from linear_api_library import LinearPredictorAPI
+
+# Load model
+model = joblib.load("best_linear_api.joblib")
+
+# Example input (replace with real data)
+X = np.random.randn(5, 30, 18).astype(np.float32)
+
+# Prediction
+y = model.predict(X)
+
+# Probabilistic output
+out = model.predict_proba(X)
+
+print(y.shape)           # (5, 18)
+print(out["mean"].shape) # (5, 18)
+print(out["std"].shape)  # (5, 18)
+
+Important notes
+
+- The input shape must be exactly (N, 30, 18). Any mismatch will raise an error.
+- The ordering of ROIs must match the training data.
+- The model internally applies the same StandardScaler used during training.
+- The model predicts one step ahead only.
+- Input data will be flattened automatically before prediction.
+
+Troubleshooting
+
+- If loading fails, make sure linear_api_library.py is in the same folder as the joblib file.
+- If predictions look incorrect, check that your input data is structured the same way as training data.
+- If you see shape errors, verify that your input matches (N, 30, 18).
+
+Summary
+
+Load the model with joblib, pass in a properly shaped NumPy array, and call predict or predict_proba. That’s all that is needed for inference.
