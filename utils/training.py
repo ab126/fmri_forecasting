@@ -289,7 +289,11 @@ def run_loso_cv(dataset_raw, model_gen, M=20, H=3, stride=1,
         )
 
         # 6. Assign model
-        model = model_gen().to(device)
+        try:
+            model = model_gen().to(device)
+        except AttributeError as e:
+            print(f"Model is not CUDA compatib: {e}\nConintuing with CPU...")
+            continue
 
         # 7. Train — delegates to train_model() from STEP 7
         print(f"Training (max {num_epochs} epochs, early stopping patience=5)...")
@@ -353,7 +357,7 @@ def run_loso_cv(dataset_raw, model_gen, M=20, H=3, stride=1,
 
     df = pd.DataFrame(fold_results)
     print(df.to_string(index=False))
-    print(f"\nMean LSTM RMSE  : {df['LSTM_RMSE'].mean():.6f}")
+    print(f"\nMean LSTM RMSE  : {df['LSTM_RMSE'].mean():.6f}") # TODO: modularize
     print(f"Mean Naive RMSE : {df['Naive_RMSE'].mean():.6f}")
     print(f"Mean eta        : {df['eta'].mean():.4f}")
     print(f"Folds beat naive: {df['beat_naive'].sum()} / {len(df)}")
