@@ -8,12 +8,32 @@ import torch.nn as nn
 
 
 class TransformerForecastModel(nn.Module):
-    def __init__(self, input_dim, window_size, d_model=64, nhead=4, num_layers=2, dropout=0.1):
+    """
+    Trainable transformer forecaster compatible with the shared LOSO pipeline.
+
+    Input:
+        x shape (batch, window_size, input_dim)
+
+    Output:
+        y shape (batch, output_horizon, input_dim)
+    """
+
+    def __init__(
+        self,
+        input_dim,
+        window_size,
+        d_model=64,
+        nhead=4,
+        num_layers=2,
+        dropout=0.1,
+        output_horizon=1,
+    ):
         super().__init__()
 
         self.input_dim = int(input_dim)
         self.window_size = int(window_size)
         self.d_model = int(d_model)
+        self.output_horizon = int(output_horizon)
 
         self.input_proj = nn.Linear(self.input_dim, self.d_model)
 
@@ -33,7 +53,9 @@ class TransformerForecastModel(nn.Module):
             num_layers=int(num_layers),
         )
 
-        self.output_layer = nn.Linear(self.d_model, self.input_dim)
+        self.output_layer = nn.Linear(
+            self.d_model, self.output_horizon * self.input_dim
+        )
 
     def forward(self, x):
         x = self.input_proj(x)
@@ -41,10 +63,16 @@ class TransformerForecastModel(nn.Module):
         x = self.transformer_encoder(x)
         x_last = x[:, -1, :]
         out = self.output_layer(x_last)
-        return out
+        return out.view(-1, self.output_horizon, self.input_dim)
 
 
 class TransformerPredictorAPI:
+    """
+    Export/inference wrapper for a trained transformer.
+
+    It now supports both one-step and multi-step forecasting shapes.
+    """
+
     def __init__(
         self,
         model: TransformerForecastModel,
@@ -66,6 +94,7 @@ class TransformerPredictorAPI:
         self.window_size = int(config["window_size"])
         self.predict_step = int(config.get("predict_step", 1))
         self.input_dim = int(config["input_dim"])
+        self.output_horizon = int(config.get("output_horizon", self.predict_step))
 
     @classmethod
     def load(cls, model_path, config_path, stats_path=None, device=None):
@@ -91,6 +120,7 @@ class TransformerPredictorAPI:
             nhead=config["nhead"],
             num_layers=config["num_layers"],
             dropout=config["dropout"],
+            output_horizon=config.get("output_horizon", config.get("predict_step", 1)),
         )
 
         state_dict = torch.load(model_path, map_location="cpu")
@@ -143,7 +173,7 @@ class TransformerPredictorAPI:
                 out = self.model(batch)
                 preds.append(out.cpu().numpy())
 
-        return np.vstack(preds)
+        return np.concatenate(preds, axis=0)
 
     def predict_proba(self, X, batch_size=256):
         mean = self.predict(X, batch_size=batch_size)
@@ -155,12 +185,17 @@ class TransformerPredictorAPI:
         residual_std = np.asarray(residual_std, dtype=np.float32)
 
         if residual_std.ndim == 0:
-            residual_std = np.full((self.input_dim,), float(residual_std), dtype=np.float32)
+            residual_std = np.full(
+                (self.input_dim,), float(residual_std), dtype=np.float32
+            )
 
         if residual_std.shape != (self.input_dim,):
             residual_std = np.ones((self.input_dim,), dtype=np.float32)
 
-        std = np.tile(residual_std, (mean.shape[0], 1))
+        std = np.tile(
+            residual_std.reshape(1, 1, self.input_dim),
+            (mean.shape[0], self.output_horizon, 1),
+        )
 
         return {
             "mean": mean,
@@ -171,8 +206,32 @@ class TransformerPredictorAPI:
         return {
             "window_size": self.window_size,
             "predict_step": self.predict_step,
+            "output_horizon": self.output_horizon,
             "input_dim": self.input_dim,
             "device": str(self.device),
             "config_keys": list(self.config.keys()),
             "stats_keys": list(self.stats.keys()),
         }
+
+
+def transformer_model_generator(
+    n_roi,
+    M,
+    H=1,
+    d_model=64,
+    nhead=4,
+    num_layers=2,
+    dropout=0.1,
+):
+    """
+    Factory function matching the rest of the framework.
+    """
+    return TransformerForecastModel(
+        input_dim=n_roi,
+        window_size=M,
+        d_model=d_model,
+        nhead=nhead,
+        num_layers=num_layers,
+        dropout=dropout,
+        output_horizon=H,
+    )
