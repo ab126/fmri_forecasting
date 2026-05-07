@@ -1,4 +1,5 @@
 /data/
 /saves/
-models/lstm/__pycache__/
-/venv/
+__pycache__/
+*.pyc
+
