@@ -155,7 +155,7 @@ def build_sliding_windows(data_list, M, H, stride=1):
     return np.array(X, dtype=np.float32), np.array(Y, dtype=np.float32)
 
 
-def split_by_subject(dataset, test_ratio=0.2, test_subjects=None, random_state=42, verebose=True):
+def split_by_subject(dataset, test_ratio=0.2, test_subjects=None, random_state=42, verbose=True):
     """
     Flexible subject split.
 
@@ -182,7 +182,7 @@ def split_by_subject(dataset, test_ratio=0.2, test_subjects=None, random_state=4
     train_items = [item for item in dataset if item["subject"] in train_subjects]
     test_items = [item for item in dataset if item["subject"] in test_subjects]
     
-    if verebose:
+    if verbose:
         print(f"Train subjects: {train_subjects}")
         print(f"Test subjects : {test_subjects}")
         print(f"Train runs: {len(train_items)}")
@@ -193,14 +193,13 @@ def split_by_subject(dataset, test_ratio=0.2, test_subjects=None, random_state=4
 # TODO: split_within_subjects() - within-subject forecasting
 
 
-def load_dataset_main():
-    """ Load the dataset given in session/run.npz organization"""
+def load_dataset_main(root_dir=None):
+    """ Load the dataset given in session/run.npz organization """
 
-    # Source path on Google Drive
-    data_dir = Path("data")
-
-    # Local path 
-    root_dir = data_dir / "pooled_stratified_share" 
+    if root_dir is None:
+        root_dir = Path("train_data") / "pooled_stratified_share" 
+    elif isinstance(root_dir, str):
+        root_dir = Path(root_dir)
 
     if not os.path.exists(root_dir):
         raise ValueError(f"ERROR: Dataset folder not found: {root_dir}")
@@ -217,11 +216,11 @@ def load_dataset_main():
     print(f"Successfully loaded runs: {len(dataset)}")
     print(f"Loading time: {end_load - start_load:.2f} seconds")
 
-
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Device: {device}")
 
     return dataset, device
+
 
 def parse_dataset(M=50, H=3, normalize=True, stride=1, test_ratio=0.2, test_subjects=None, random_state=42, verbose=True):
     """
@@ -242,7 +241,7 @@ def parse_dataset(M=50, H=3, normalize=True, stride=1, test_ratio=0.2, test_subj
 
     if verbose:
         print("Building sliding windows...")
-    X, Y = build_sliding_windows(normalized_data, M, H, stride)
+    # X, Y = build_sliding_windows(normalized_data, M, H, stride)
 
     if verbose:
         print("Splitting by subject...")
