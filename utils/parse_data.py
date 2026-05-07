@@ -225,7 +225,7 @@ def load_dataset_main(root_dir=None):
     """
 
     if root_dir is None:
-        root_dir = Path("train_data") / "pooled_stratified_share" 
+        root_dir = Path("data") / "train_pooled_stratified_share" 
     elif isinstance(root_dir, str):
         root_dir = Path(root_dir)
 
@@ -250,7 +250,7 @@ def load_dataset_main(root_dir=None):
     return dataset, device
 
 
-def parse_dataset(root_dir=None,M=50, H=3, normalize=True, stride=1, test_ratio=0.2, test_subjects=None, random_state=42, verbose=True):
+def parse_dataset(root_dir=None, M=50, H=3, normalize=True, stride=1, test_ratio=0.2, test_subjects=None, random_state=42, verbose=True):
     """
     Main function to load, normalize, window, and split the dataset for forecasting.
     
