@@ -1,5 +1,6 @@
 # Module containing information theoretic measures
 import numpy as np
+from tqdm.auto import tqdm
 
 # ============================================================
 # Basic utilities
@@ -80,36 +81,37 @@ def compute_di_from_log_prob_api(
 
     full_pred = model.predict_proba(X, batch_size=batch_size)
 
-    for source_roi in range(R):
-        X_red = make_reduced_input(
-            X,
-            source_roi=source_roi,
-            mode=reduction_mode,
-            rng=rng,
-        )
-
-        red_pred = model.predict_proba(X_red, batch_size=batch_size)
-
-        for target_roi in range(R):
-            y = Y[:, horizon_idx, target_roi]
-
-            logp_full = extract_log_prob(
-                pred=full_pred,
-                y=y,
-                roi_idx=target_roi,
-                horizon_idx=horizon_idx,
+    with tqdm(total=R * R, desc="Computing DI") as pbar:
+        for source_roi in range(R):
+            X_red = make_reduced_input(
+                X,
+                source_roi=source_roi,
+                mode=reduction_mode,
+                rng=rng,
             )
 
-            logp_red = extract_log_prob(
-                pred=red_pred,
-                y=y,
-                roi_idx=target_roi,
-                horizon_idx=horizon_idx,
-            )
+            red_pred = model.predict_proba(X_red, batch_size=batch_size)
 
-            sample_di = logp_full - logp_red
-            DI[source_roi, target_roi] = np.nanmean(sample_di)
+            for target_roi in range(R):
+                y = Y[:, horizon_idx, target_roi]
 
+                logp_full = extract_log_prob(
+                    pred=full_pred,
+                    y=y,
+                    roi_idx=target_roi,
+                    horizon_idx=horizon_idx,
+                )
+
+                logp_red = extract_log_prob(
+                    pred=red_pred,
+                    y=y,
+                    roi_idx=target_roi,
+                    horizon_idx=horizon_idx,
+                )
+
+                sample_di = logp_full - logp_red
+                DI[source_roi, target_roi] = np.nanmean(sample_di)
+                pbar.update(1)
     return DI
 
 
@@ -167,4 +169,163 @@ def extract_log_prob(pred, y, roi_idx, horizon_idx=0):
         "predict_proba output must contain one of: "
         "'log_prob', 'log_prob_fn', 'probs'+'bin_edges', or 'mean'+'std'."
     )
+
+
+# ============================================================
+# Model Wrapper for DI estimation
+# ============================================================
+class FlowPredictorAPI:
+    """
+    Wrapper for a neural forecaster with conditional normalizing flow head.
+
+    Assumes the internal model can compute log p(Y | X).
+    """
+
+    def __init__(self, model_obj, device="cpu"):
+        self.model_obj = model_obj
+        self.device = device
+        self.model_obj.to(device)
+        self.model_obj.eval()
+
+    def predict_proba(self, X, batch_size=512):
+        import torch
+
+        X = np.asarray(X, dtype=np.float32)
+        logps = []
+
+        with torch.no_grad():
+            for start in range(0, len(X), batch_size):
+                end = min(start + batch_size, len(X))
+                xb = torch.tensor(X[start:end], dtype=torch.float32).to(self.device)
+
+                # Your model should implement this.
+                # Output shape: (batch, H, ROI)
+                logp_batch = self.model_obj.log_prob_next(xb)
+
+                logps.append(logp_batch.cpu().numpy())
+
+        return {
+            "log_prob": np.concatenate(logps, axis=0)
+        }
+
+class HistogramProbaAdapter: # TODO: debug bins, think they are all zero
+    """
+    Adds predict_proba to any forecasting model using empirical residual histograms.
+
+    Base model must implement:
+        predict(X)
+
+    Expected model prediction shape:
+        either (N, H, R)
+        or flattened (N, H * R)
+    """
+
+    def __init__(
+        self,
+        base_model,
+        bin_edges,
+        residual_hist,
+        H,
+        R,
+        flatten_input=False,
+        flatten_output=False,
+    ):
+        self.base_model = base_model
+        self.bin_edges = bin_edges
+        self.residual_hist = residual_hist
+        self.H = int(H)
+        self.R = int(R)
+        self.flatten_input = flatten_input
+        self.flatten_output = flatten_output
+
+    def predict(self, X):
+        X_in = X.reshape(X.shape[0], -1) if self.flatten_input else X
+        pred = self.base_model.predict(X_in)
+
+        pred = np.asarray(pred, dtype=np.float32)
+
+        if pred.ndim == 2:
+            pred = pred.reshape(X.shape[0], self.H, self.R)
+
+        return pred
+
+    def predict_proba(self, X, batch_size=512):
+        """
+        Returns a discrete predictive distribution over fixed bins.
+
+        Output:
+            probs shape = (N, H, R, B)
+            bin_edges shape = (R, B + 1) or (B + 1,)
+        """
+        mu = self.predict(X)
+        N, H, R = mu.shape
+        B = self.residual_hist.shape[-1]
+
+        probs = np.zeros((N, H, R, B), dtype=np.float32)
+
+        # Residual histogram is indexed by horizon and ROI.
+        # Shape: (H, R, B)
+        for h in range(H):
+            for r in range(R):
+                probs[:, h, r, :] = self.residual_hist[h, r, :]
+
+        return {
+            "mean": mu,
+            "probs": probs,
+            "bin_edges": self.bin_edges,
+        }
+
+def fit_histogram_proba_adapter(
+    base_model,
+    X_calib,
+    Y_calib,
+    n_bins=50,
+    flatten_input=False,
+    flatten_output=False,
+    eps=1e-6,
+):
+    """
+    Calibrates a histogram likelihood adapter from residuals.
+
+    X_calib: shape (N, M, R)
+    Y_calib: shape (N, H, R)
+    """
+    X_calib = np.asarray(X_calib, dtype=np.float32)
+    Y_calib = np.asarray(Y_calib, dtype=np.float32)
+
+    N, H, R = Y_calib.shape
+
+    X_in = X_calib.reshape(N, -1) if flatten_input else X_calib
+    pred = base_model.predict(X_in)
+    pred = np.asarray(pred, dtype=np.float32)
+
+    if pred.ndim == 2:
+        pred = pred.reshape(N, H, R)
+
+    residuals = Y_calib - pred
+
+    bin_edges = np.linspace(np.min(residuals), np.max(residuals), n_bins + 1)
+    residual_hist = np.zeros((H, R, n_bins), dtype=np.float32)
+
+    for h in range(H):
+        for r in range(R):
+            hist, _ = np.histogram(
+                residuals[:, h, r],
+                bins=bin_edges,
+                density=False,
+            )
+            hist = hist.astype(np.float32) + eps
+            hist = hist / hist.sum()
+            residual_hist[h, r, :] = hist
+
+    return HistogramProbaAdapter(
+        base_model=base_model,
+        bin_edges=bin_edges,
+        residual_hist=residual_hist,
+        H=H,
+        R=R,
+        flatten_input=flatten_input,
+        flatten_output=flatten_output,
+    )
+
 

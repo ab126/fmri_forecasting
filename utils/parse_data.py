@@ -308,7 +308,7 @@ def parse_dataset(root_dir=None, M=50, H=3, normalize=True, stride=1, test_ratio
     if normalize:
         if verbose:
             print("Normalizing dataset...")
-        normalized_data = normalize_items(dataset)
+        normalized_data = normalize_items(dataset) # TODO: do normalization wihin train and test groups
     else:
         normalized_data = dataset
 
@@ -328,5 +328,5 @@ def parse_dataset(root_dir=None, M=50, H=3, normalize=True, stride=1, test_ratio
 
     return X_train, Y_train, X_test, Y_test, device
 
-    
+
 
