@@ -2,4 +2,7 @@
 /saves/
 __pycache__/
 *.pyc
+/save
+/checkpoints
+/venv
 
