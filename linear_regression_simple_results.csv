@@ -1,0 +1,2 @@
+model,M,H,stride,model_rmse,naive_rmse,rmsse,eta,beat_naive
+Linear Regression,50,3,1,0.7993882298469543,0.9919413924217224,1.0085397958755493,0.12247307692439868,True

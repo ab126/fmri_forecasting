@@ -193,138 +193,85 @@ def split_by_subject(dataset, test_ratio=0.2, test_subjects=None, random_state=4
 # TODO: split_within_subjects() - within-subject forecasting
 
 
-def load_dataset_main(root_dir=None):
+def parse_dataset(
+    root_dir=None,
+    M=50,
+    H=3,
+    normalize=True,
+    stride=1,
+    test_ratio=0.2,
+    test_subjects=None,
+    random_state=42,
+    verbose=True
+):
     """
-    Load the dataset given in session/run.npz organization.
-    
-    Scans the specified directory for .npz files containing ROI timeseries data,
-    applies fixed ROI schema filtering, and returns the loaded dataset along with
-    the appropriate computing device (CPU or GPU).
-    
-    Parameters
-    ----------
-    root_dir : str or Path, optional
-        Path to the root directory containing the organized .npz files.
-        If None, defaults to "train_data/pooled_stratified_share".
-        Expected structure: root_dir/subject_name/run_name.npz
-    
-    Returns
-    -------
-    dataset : list of dict
-        List of loaded timeseries runs. Each dict contains:
-        - "timeseries": np.ndarray of shape (T, ROI), z-score normalized
-        - "subject": str, subject identifier
-        - "roi_labels": tuple, ROI names
-    device : torch.device
-        The appropriate device for model training (cuda if available, else cpu)
-    
-    Raises
-    ------
-    ValueError
-        If the dataset folder does not exist.
+    Main function to load, split, normalize, window, and return train/test data
+    for BOLD signal forecasting.
+
+    Important order:
+        1. Load raw runs
+        2. Split by subject
+        3. Normalize train/test groups separately
+        4. Build sliding windows separately
+
+    This order avoids train/test leakage and keeps the test subjects fully held out.
     """
 
-    if root_dir is None:
-        root_dir = Path("data") / "train_pooled_stratified_share" 
-    elif isinstance(root_dir, str):
-        root_dir = Path(root_dir)
-
-    if not os.path.exists(root_dir):
-        raise ValueError(f"ERROR: Dataset folder not found: {root_dir}")
-
-    print(f"Using dataset path: {root_dir}")
-
-    # Load dataset directly using fixed schema settings from STEP 2
-
-    print("Loading dataset with fixed schema settings...")
-    start_load = time.time()
-    dataset = load_dataset(root_dir)
-    end_load = time.time()
-
-    print(f"Successfully loaded runs: {len(dataset)}")
-    print(f"Loading time: {end_load - start_load:.2f} seconds")
-
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Device: {device}")
-
-    return dataset, device
-
-
-def parse_dataset(root_dir=None, M=50, H=3, normalize=True, stride=1, test_ratio=0.2, test_subjects=None, random_state=42, verbose=True):
-    """
-    Main function to load, normalize, window, and split the dataset for forecasting.
-    
-    This is the primary entry point for dataset preprocessing. It orchestrates loading,
-    normalization, sliding window creation, and subject-based train/test splitting for
-    BOLD signal forecasting models.
-    
-    Parameters
-    ----------
-    root_dir : str or Path, optional
-        Path to the root directory containing .npz files. Defaults to
-        "train_data/pooled_stratified_share" if None.
-    M : int, default=50
-        Context window size (number of past timepoints to use as input).
-    H : int, default=3
-        Horizon window size (number of future timepoints to predict).
-    normalize : bool, default=True
-        If True, apply run-level z-score normalization to each timeseries.
-        Normalization is computed independently per run to avoid cross-subject
-        distribution distortion.
-    stride : int, default=1
-        Stride for sliding window extraction. stride=1 creates overlapping windows.
-    test_ratio : float, default=0.2
-        Fraction of subjects to reserve for testing (0.0 to 1.0).
-        Ignored if test_subjects is provided (LOSO mode).
-    test_subjects : list or set, optional
-        Explicit subject identifiers for testing (Leave-One-Subject-Out mode).
-        If provided, overrides test_ratio. Remaining subjects used for training.
-    random_state : int, default=42
-        Random seed for reproducible subject splitting.
-    verbose : bool, default=True
-        If True, print detailed progress information during processing.
-    
-    Returns
-    -------
-    X_train : np.ndarray
-        Training input windows of shape (N_train, M, ROI).
-    Y_train : np.ndarray
-        Training target windows of shape (N_train, H, ROI).
-    X_test : np.ndarray
-        Testing input windows of shape (N_test, M, ROI).
-    Y_test : np.ndarray
-        Testing target windows of shape (N_test, H, ROI).
-    device : torch.device
-        The appropriate device for model training (cuda if available, else cpu).
-    
-    Notes
-    -----
-    - Normalization is applied per run (not globally), which is safer for LOSO-CV.
-    - Subjects are split before windowing to prevent data leakage.
-    - Windows with insufficient timepoints (len < M+H) are skipped.
-    """
     dataset, device = load_dataset_main(root_dir=root_dir)
+
+    if verbose:
+        print("Splitting raw dataset by subject...")
+
+    train_items, test_items = split_by_subject(
+        dataset,
+        test_ratio=test_ratio,
+        test_subjects=test_subjects,
+        random_state=random_state,
+        verbose=verbose
+    )
 
     if normalize:
         if verbose:
-            print("Normalizing dataset...")
-        normalized_data = normalize_items(dataset)
+            print("Normalizing train and test groups separately...")
+
+        train_items = normalize_items(train_items)
+        test_items = normalize_items(test_items)
     else:
-        normalized_data = dataset
+        if verbose:
+            print("Skipping normalization...")
 
     if verbose:
-        print("Building sliding windows...")
-    # X, Y = build_sliding_windows(normalized_data, M, H, stride)
+        print("Building train sliding windows...")
+
+    X_train, Y_train = build_sliding_windows(
+        train_items,
+        M=M,
+        H=H,
+        stride=stride
+    )
 
     if verbose:
-        print("Splitting by subject...")
-    train_items, test_items = split_by_subject(normalized_data, test_ratio, test_subjects, random_state)
+        print("Building test sliding windows...")
 
-    X_train, Y_train = build_sliding_windows(train_items, M, H, stride)
-    X_test, Y_test = build_sliding_windows(test_items, M, H, stride)
-
+    X_test, Y_test = build_sliding_windows(
+        test_items,
+        M=M,
+        H=H,
+        stride=stride
+    )
+    
     if verbose:
-        print(f"Final shapes - Train: {X_train.shape}, {Y_train.shape} | Test: {X_test.shape}, {Y_test.shape}")
+        print(
+            f"Final shapes - "
+            f"Train: X={X_train.shape}, Y={Y_train.shape} | "
+            f"Test: X={X_test.shape}, Y={Y_test.shape}"
+        )
+
+        if len(X_train) == 0:
+            print("WARNING: X_train is empty. Check M, H, stride, or train data length.")
+
+        if len(X_test) == 0:
+            print("WARNING: X_test is empty. Check M, H, stride, or test data length.")
 
     return X_train, Y_train, X_test, Y_test, device
 

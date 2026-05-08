@@ -145,6 +145,17 @@ def compute_naive_rmse(X_test, Y_test):
     naive_preds = np.repeat(X_test[:, -1:, :], Y_test.shape[1], axis=1)
     return compute_rmse(Y_test, naive_preds)
 
+def compute_rmsse(y_true, y_pred, train_data, eps=1e-8):
+    pred_mse = np.mean((y_true - y_pred) ** 2, axis=(0, 1))
+    naive_diff = train_data[:, 1:, :] - train_data[:, :-1, :]
+    naive_mse = np.mean(naive_diff ** 2, axis=(0, 1))
+    naive_mse = np.maximum(naive_mse, eps) # avoid dividing by 0
+
+    # ROI-wise RMSSE
+    rmsse_per_roi = np.sqrt(pred_mse / naive_mse)
+
+    # Average across ROIs
+    return float(np.mean(rmsse_per_roi))
 
 def _is_torch_model(model):
     return isinstance(model, nn.Module)
@@ -289,6 +300,7 @@ def compute_eta(y_true, y_pred):
 
     return float(np.nanmean(etas))
 
+# add in RMSSE
 
 def horizon_rmse(y_true, y_pred):
     """Compute and print RMSE separately for each forecast step."""
