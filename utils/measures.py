@@ -148,12 +148,15 @@ def extract_log_prob(pred, y, roi_idx, horizon_idx=0):
         probs = pred["probs"][:, horizon_idx, roi_idx, :]
         bin_edges = pred["bin_edges"]
 
+        mu = pred["mean"][:, horizon_idx, roi_idx]
+        residual = y - mu
+
         if np.asarray(bin_edges).ndim == 2:
             edges = np.asarray(bin_edges)[roi_idx]
         else:
             edges = np.asarray(bin_edges)
 
-        bin_ids = np.digitize(y, edges) - 1
+        bin_ids = np.digitize(residual, edges) - 1
         bin_ids = np.clip(bin_ids, 0, probs.shape[1] - 1)
 
         p = probs[np.arange(len(y)), bin_ids]
@@ -249,7 +252,7 @@ class HistogramProbaAdapter: # TODO: debug bins, think they are all zero
 
         return pred
 
-    def predict_proba(self, X, batch_size=512):
+    def predict_proba(self, X):
         """
         Returns a discrete predictive distribution over fixed bins.
 
