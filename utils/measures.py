@@ -179,41 +179,102 @@ def extract_log_prob(pred, y, roi_idx, horizon_idx=0):
 # ============================================================
 class FlowPredictorAPI:
     """
-    Wrapper for a neural forecaster with conditional normalizing flow head.
+    Likelihood wrapper for torch forecasters.
 
-    Assumes the internal model can compute log p(Y | X).
+    If model_obj has log_prob_next(X, Y), use it directly.
+    Otherwise, use point forecasts + calibrated residual std to compute
+    log p(Y | X). This fallback is Gaussian, not a true flow.
     """
 
-    def __init__(self, model_obj, device="cpu"):
-        self.model_obj = model_obj
-        self.device = device
-        self.model_obj.to(device)
-        self.model_obj.eval()
-
-    def predict_proba(self, X, Y=None, batch_size=512):
+    def __init__(self, model_obj, device="cpu", residual_std=None, eps=1e-8):
         import torch
+        self.model_obj = model_obj.to(device)
+        self.device = torch.device(device)
+        self.model_obj.eval()
+        self.residual_std = residual_std
+        self.eps = eps
 
-        if Y is None:
-            raise ValueError("Flow likelihood requires Y to compute log p(Y | X).")
 
+    def fit_residual_std(self, X_calib, Y_calib, batch_size=512):
+        """
+        Estimate residual std from calibration data.
+
+        X_calib: (N, M, R)
+        Y_calib: (N, H, R)
+        """
+        mean = self.predict(X_calib, batch_size=batch_size)
+        resid = Y_calib - mean
+        self.residual_std = np.std(resid, axis=0) + self.eps  # shape (H, R)
+        return self
+    
+    def predict(self, X, batch_size=512):
+        import torch
         X = np.asarray(X, dtype=np.float32)
-        Y = np.asarray(Y, dtype=np.float32)
 
-        logps = []
-
+        preds = []
         with torch.no_grad():
             for start in range(0, len(X), batch_size):
                 end = min(start + batch_size, len(X))
-
                 xb = torch.tensor(X[start:end], dtype=torch.float32).to(self.device)
-                yb = torch.tensor(Y[start:end], dtype=torch.float32).to(self.device)
+                out = self.model_obj(xb)
+                preds.append(out.detach().cpu().numpy())
 
-                logp_batch = self.model_obj.log_prob_next(xb, yb)
-                logps.append(logp_batch.cpu().numpy())
+        return np.concatenate(preds, axis=0)
+
+    def log_prob_next(self, X, Y, batch_size=512):
+        """
+        Returns log p(Y | X), shape (N, H, R).
+        """
+        import torch
+
+        # If the torch model already has a real flow likelihood, use it.
+        if hasattr(self.model_obj, "log_prob_next"):
+            X = np.asarray(X, dtype=np.float32)
+            Y = np.asarray(Y, dtype=np.float32)
+
+            logps = []
+            with torch.no_grad():
+                for start in range(0, len(X), batch_size):
+                    end = min(start + batch_size, len(X))
+                    xb = torch.tensor(X[start:end], dtype=torch.float32).to(self.device)
+                    yb = torch.tensor(Y[start:end], dtype=torch.float32).to(self.device)
+                    lp = self.model_obj.log_prob_next(xb, yb)
+                    logps.append(lp.detach().cpu().numpy())
+
+            return np.concatenate(logps, axis=0)
+
+        # Fallback: point forecast + calibrated residual likelihood
+        if self.residual_std is None:
+            raise ValueError(
+                "No true log_prob_next found and residual_std is None. "
+                "Call flow_api.fit_residual_std(X_val, Y_val) first."
+            )
+
+        mean = self.predict(X, batch_size=batch_size)
+        Y = np.asarray(Y, dtype=np.float32)
+
+        std = np.asarray(self.residual_std, dtype=np.float32)
+        if std.ndim == 1:
+            std = std.reshape(1, -1)  # (1, R)
+
+        var = std[None, :, :] ** 2 + self.eps  # (1, H, R)
+
+        logp = (
+            -0.5 * np.log(2 * np.pi * var)
+            -0.5 * ((Y - mean) ** 2 / var)
+        )
+        return logp.astype(np.float32)
+    
+    def predict_proba(self, X, Y=None, batch_size=512):
+        if Y is None:
+            raise ValueError("Y is required to evaluate log p(Y | X).")
+
+        logp = self.log_prob_next(X, Y, batch_size=batch_size)
 
         return {
-            "log_prob": np.concatenate(logps, axis=0)
+            "log_prob": logp
         }
+  
 
 class HistogramProbaAdapter: # TODO: debug bins, think they are all zero
     """

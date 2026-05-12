@@ -7,9 +7,8 @@ from torch.utils.data import Dataset, DataLoader
 from tqdm.auto import tqdm
 import pandas as pd
 import numpy as np
-import matplotlib.pyplot as plt
 
-from utils.parse_data import split_by_subject, normalize_items, build_sliding_windows
+from .parse_data import split_by_subject, normalize_items, build_sliding_windows
 
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")

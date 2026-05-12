@@ -4,6 +4,7 @@ import numpy as np
 from sklearn.base import BaseEstimator, RegressorMixin
 from torch.utils.data import DataLoader
 
+from utils.training import FMRIWindowDataset
 
 class AdvancedLSTM(nn.Module):
     """
@@ -37,9 +38,10 @@ class AdvancedLSTM(nn.Module):
         # Reshape to (Batch, Horizon, ROI)
         return out.view(-1, self.output_horizon, self.input_size)
 
+# TODO: Make it compatible with DI computation api
 class FmriPredictorAPI(BaseEstimator, RegressorMixin):
     """
-    Scikit-Learn compatible API for the fMRI LSTM model.
+    Scikit-Learn compatible API for the fMRI LSTM model .
     Encapsulates preprocessing (tensor conversion) and inference.
     """
     def __init__(self, model_obj=None, M=50, H=3, device='cpu'):
