@@ -13,27 +13,18 @@ import pandas as pd
 from tqdm.auto import tqdm
 
 
-# =========================
-# OPTIMIZED DATA LOADING FUNCTIONS
-# (Fixed ROI schema, no repeated schema search)
-# =========================
-
-# Paste the full most common ROI schema tuple here once you have it.
-# Example:
-# TARGET_SCHEMA = ('ROI_1', 'ROI_2', 'ROI_3', ...)
-TARGET_SCHEMA = None
-
-# Fallback: use ROI count if full schema is not pasted yet.
-TARGET_ROI_COUNT = 19
-
-# Set this to True when you paste the exact schema tuple above.
-USE_FULL_SCHEMA = False
-
-
-def load_dataset(data_dir):
+def load_dataset(data_dir, TARGET_SCHEMA = None, TARGET_ROI_COUNT = None):
     """
     Load raw timeseries without normalization.
     Uses a fixed ROI schema to avoid repeated full-dataset schema scans.
+        Example:
+        TARGET_SCHEMA = ('ROI_1', 'ROI_2', 'ROI_3', ...)
+
+        Fallback: use ROI count if full schema is not pasted yet.
+        TARGET_ROI_COUNT = 19
+
+        Set USE_FULL_SCHEMA to True when you paste the exact schema tuple above.
+
     Normalization will be applied after subject-level split.
     """
     dataset = []
@@ -57,16 +48,13 @@ def load_dataset(data_dir):
                     roi_labels = tuple(map(str, data["roi_labels"].tolist()))
 
                     # Full schema match (recommended for research validity)
-                    if USE_FULL_SCHEMA:
-                        if TARGET_SCHEMA is None:
-                            raise ValueError("TARGET_SCHEMA is None. Paste the full ROI schema tuple first.")
-                        if roi_labels != TARGET_SCHEMA:
-                            continue
+                    
+                    if TARGET_SCHEMA is not None and TARGET_SCHEMA != roi_labels:
+                        continue
 
                     # ROI-count fallback (faster, but less strict)
-                    else:
-                        if len(roi_labels) != TARGET_ROI_COUNT:
-                            continue
+                    if TARGET_ROI_COUNT is not None and len(roi_labels) != TARGET_ROI_COUNT:
+                        continue
 
                     ts = data["timeseries"].astype(np.float32)
 
@@ -76,10 +64,12 @@ def load_dataset(data_dir):
                     # Ensure shape is (T, ROI)
                     if ts.shape[0] < ts.shape[1]:
                         ts = ts.T
-
-                    expected_roi_count = len(TARGET_SCHEMA) if (USE_FULL_SCHEMA and TARGET_SCHEMA is not None) else TARGET_ROI_COUNT
-                    if ts.shape[1] != expected_roi_count:
-                        continue
+                    
+                    # Additional check for ROI count if either schema or count is specified
+                    if TARGET_SCHEMA is not None or TARGET_ROI_COUNT is not None:
+                        expected_roi_count = len(TARGET_SCHEMA) if (TARGET_SCHEMA is not None) else TARGET_ROI_COUNT
+                        if ts.shape[1] != expected_roi_count:
+                            continue
 
                     dataset.append({
                         "timeseries": ts,

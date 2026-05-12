@@ -79,7 +79,7 @@ def compute_di_from_log_prob_api(
     N, M, R = X.shape
     DI = np.zeros((R, R), dtype=np.float32)
 
-    full_pred = model.predict_proba(X, batch_size=batch_size)
+    full_pred = model.predict_proba(X, Y=Y, batch_size=batch_size)
 
     with tqdm(total=R * R, desc="Computing DI") as pbar:
         for source_roi in range(R):
@@ -90,7 +90,7 @@ def compute_di_from_log_prob_api(
                 rng=rng,
             )
 
-            red_pred = model.predict_proba(X_red, batch_size=batch_size)
+            red_pred = model.predict_proba(X_red, Y=Y, batch_size=batch_size)
 
             for target_roi in range(R):
                 y = Y[:, horizon_idx, target_roi]
@@ -190,21 +190,25 @@ class FlowPredictorAPI:
         self.model_obj.to(device)
         self.model_obj.eval()
 
-    def predict_proba(self, X, batch_size=512):
+    def predict_proba(self, X, Y=None, batch_size=512):
         import torch
 
+        if Y is None:
+            raise ValueError("Flow likelihood requires Y to compute log p(Y | X).")
+
         X = np.asarray(X, dtype=np.float32)
+        Y = np.asarray(Y, dtype=np.float32)
+
         logps = []
 
         with torch.no_grad():
             for start in range(0, len(X), batch_size):
                 end = min(start + batch_size, len(X))
+
                 xb = torch.tensor(X[start:end], dtype=torch.float32).to(self.device)
+                yb = torch.tensor(Y[start:end], dtype=torch.float32).to(self.device)
 
-                # Your model should implement this.
-                # Output shape: (batch, H, ROI)
-                logp_batch = self.model_obj.log_prob_next(xb)
-
+                logp_batch = self.model_obj.log_prob_next(xb, yb)
                 logps.append(logp_batch.cpu().numpy())
 
         return {
@@ -252,7 +256,7 @@ class HistogramProbaAdapter: # TODO: debug bins, think they are all zero
 
         return pred
 
-    def predict_proba(self, X):
+    def predict_proba(self, X, Y=None, batch_size=512): # keep Y and batch_size for API consistency, but this adapter does not use them
         """
         Returns a discrete predictive distribution over fixed bins.
 

@@ -213,6 +213,12 @@ class TransformerPredictorAPI:
             "stats_keys": list(self.stats.keys()),
         }
 
+    def to(self, device):
+        """Assign model to specified device."""
+        self.device = torch.device(device)
+        self.model.to(self.device)
+        return self
+
 
 def transformer_model_generator(
     n_roi,

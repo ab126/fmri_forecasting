@@ -66,7 +66,7 @@ def train_model(model, train_loader, val_loader=None, num_epochs=30, device=None
         model.parameters(), lr=5e-4, weight_decay=1e-5
     )
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer, mode="min", factor=0.5, patience=2
+        optimizer, mode="min", factor=0.5, patience=patience
     )
 
     criterion = DeltaAwareLoss(alpha=0.3, delta=0.5)
