@@ -2,7 +2,7 @@ import argparse
 from pathlib import Path
 import shutil
 
-from fmri_forecasting.utils.nsd_utils import NSDDataHandler
+from utils.nsd_utils import NSDDataHandler
 
 
 BUCKET = "natural-scenes-dataset"

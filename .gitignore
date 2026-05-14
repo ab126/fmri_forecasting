@@ -2,4 +2,4 @@
 /saves/
 __pycache__/
 *.pyc
-
+nohup.out
