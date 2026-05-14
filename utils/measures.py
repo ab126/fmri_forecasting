@@ -343,6 +343,7 @@ class HistogramProbaAdapter: # TODO: debug bins, think they are all zero
             "bin_edges": self.bin_edges,
         }
 
+
 def fit_histogram_proba_adapter(
     base_model,
     X_calib,
