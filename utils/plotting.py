@@ -92,3 +92,18 @@ def show_individual_roi_results(model, X_test, Y_test, device,
             align_mean=False    # keep False for honest plots
         )
 
+
+def plot_per_roi_bar(values, roi_labels=None, ylabel="Value", title="", figsize=(10, 4)):
+    values = np.asarray(values)
+
+    if roi_labels is None:
+        roi_labels = [f"ROI {i}" for i in range(len(values))]
+
+    plt.figure(figsize=figsize)
+    plt.bar(np.arange(len(values)), values)
+    plt.xticks(np.arange(len(values)), roi_labels, rotation=45, ha="right")
+    plt.ylabel(ylabel)
+    plt.title(title)
+    plt.tight_layout()
+    plt.show()
+

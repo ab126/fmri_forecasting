@@ -1,12 +1,13 @@
 import copy
+import pandas as pd
+import numpy as np
+from tqdm.auto import tqdm
 
 import torch
 import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
 
-from tqdm.auto import tqdm
-import pandas as pd
-import numpy as np
+from .measures import compute_eta_gauss
 
 from .parse_data import split_by_subject, normalize_items, build_sliding_windows
 
@@ -55,7 +56,7 @@ class DeltaAwareLoss(nn.Module):
         return base_loss + self.alpha * delta_loss
 
 
-def train_model(model, train_loader, val_loader=None, num_epochs=30, device=None, patience=5):
+def train_model(model, train_loader, val_loader=None, num_epochs=30, device=None, patience=5, verbose=True):
     if device is None:
         device = torch.device("cpu")
     elif isinstance(device, str):
@@ -101,7 +102,8 @@ def train_model(model, train_loader, val_loader=None, num_epochs=30, device=None
                     ).item()
             val_loss /= len(val_loader)
 
-            print(f"  Epoch {epoch+1:2d} | train: {avg_loss:.6f} | val: {val_loss:.6f}")
+            if verbose:
+                print(f"  Epoch {epoch+1:2d} | train: {avg_loss:.6f} | val: {val_loss:.6f}")
 
             if val_loss < best_val_loss:
                 best_val_loss = val_loss
@@ -109,30 +111,45 @@ def train_model(model, train_loader, val_loader=None, num_epochs=30, device=None
                 patience_counter = 0
             else:
                 patience_counter += 1
-                print(f"  No improvement ({patience_counter}/{patience})")
+                if verbose:
+                    print(f"  No improvement ({patience_counter}/{patience})")
                 if patience_counter >= patience:
                     print(f"  Early stopping at epoch {epoch+1}")
                     break
         else:
-            print(f"  Epoch {epoch+1:2d} | train loss: {avg_loss:.6f}")
+            if verbose:
+                print(f"  Epoch {epoch+1:2d} | train loss: {avg_loss:.6f}")
 
     if best_state is not None:
         model.load_state_dict(best_state)
-        print(f"  Best val loss: {best_val_loss:.6f} | weights restored")
+        if verbose:
+            print(f"  Best val loss: {best_val_loss:.6f} | weights restored")
 
     return model
 
 
-def get_predictions(model, loader, device):
-    """Runs inference and returns concatenated predictions and targets."""
+def get_predictions(model, loader, device=None):
+    """Runs inference and returns concatenated predictions."""
+    
+    if device is None:
+        device = next(model.parameters()).device
+
+    model = model.to(device)
     model.eval()
-    all_preds, all_targets = [], []
+
+    all_preds = []
     with torch.no_grad():
-        for xb, yb in loader:
-            preds = model(xb.to(device))
-            all_preds.append(preds.cpu().numpy())
-            all_targets.append(yb.numpy())
-    return np.concatenate(all_preds), np.concatenate(all_targets)
+        for batch in loader:
+            if isinstance(batch, (tuple, list)):
+                xb = batch[0]
+            else:
+                xb = batch
+
+            xb = xb.to(device, non_blocking=True)
+
+            preds = model(xb)
+            all_preds.append(preds.detach().cpu().numpy())
+    return np.concatenate(all_preds, axis=0)
 
 
 def compute_rmse(y_true, y_pred):
@@ -176,6 +193,8 @@ def _reshape_predictions(preds, target_shape):
         f"Could not reshape predictions from {preds.shape} to {target_shape}"
     )
 
+def _expects_windowed_input(model):
+    return getattr(model, "expects_windowed_input", False)
 
 def _clone_model(model):
     """Best-effort clone for either PyTorch modules or sklearn estimators."""
@@ -191,9 +210,10 @@ def train_forecasting_model(
     X_val=None,
     Y_val=None,
     batch_size=512,
-    num_epochs=30,
+    num_epochs=10,
     device=None,
     patience=5,
+    verbose=True
 ):
     """
     Train either a PyTorch forecasting model or an sklearn-style estimator.
@@ -221,12 +241,16 @@ def train_forecasting_model(
             num_epochs=num_epochs,
             device=device,
             patience=patience,
+            verbose=verbose
         )
 
     if hasattr(model, "fit") and hasattr(model, "predict"):
-        X_train_flat = _flatten_model_inputs(X_train)
-        Y_train_flat = _flatten_model_targets(Y_train)
-        model.fit(X_train_flat, Y_train_flat)
+        if _expects_windowed_input(model):
+            model.fit(X_train, Y_train)
+        else:
+            X_train_flat = _flatten_model_inputs(X_train)
+            Y_train_flat = _flatten_model_targets(Y_train)
+            model.fit(X_train_flat, Y_train_flat)
         return model
 
     raise TypeError(
@@ -235,14 +259,11 @@ def train_forecasting_model(
     )
 
 
-def predict_forecasting_model(model, X, Y=None, batch_size=512, device=None):
+def predict_forecasting_model(model, X, batch_size=512, device=None):
     """Run inference for either a PyTorch forecasting model or an sklearn estimator."""
     if _is_torch_model(model):
-        if Y is None:
-            raise ValueError("Y is required for torch-model evaluation in this helper.")
-
         test_loader = DataLoader(
-            FMRIWindowDataset(X, Y),
+            FMRIWindowDataset(X),
             batch_size=batch_size,
             shuffle=False,
             pin_memory=True,
@@ -250,43 +271,16 @@ def predict_forecasting_model(model, X, Y=None, batch_size=512, device=None):
         return get_predictions(model, test_loader, device)
 
     if hasattr(model, "predict"):
-        preds = model.predict(_flatten_model_inputs(X))
-        if Y is not None:
-            preds = _reshape_predictions(preds, Y.shape)
-        return preds, Y
+        if _expects_windowed_input(model):
+            preds = model.predict(X)
+        else:
+            preds = model.predict(_flatten_model_inputs(X))
+        return preds
 
     raise TypeError(
         "Unsupported model type. Expected a torch.nn.Module or an estimator "
         "with a predict method."
     )
-
-
-def compute_eta(y_true, y_pred):
-    """
-    Information-theoretic eta computed per ROI and averaged.
-    """
-    if y_true.ndim == 3:
-        y_true = y_true.reshape(-1, y_true.shape[-1])
-        y_pred = y_pred.reshape(-1, y_pred.shape[-1])
-
-    n_roi = y_true.shape[1]
-    etas = []
-
-    for roi in range(n_roi):
-        yt = y_true[:, roi]
-        yp = y_pred[:, roi]
-
-        if yt.std() < 1e-8 or yp.std() < 1e-8:
-            continue
-
-        r = np.corrcoef(yt, yp)[0, 1]
-        r = np.clip(r, -1 + 1e-7, 1 - 1e-7)
-
-        mi = -0.5 * np.log(1 - r ** 2)
-        hy = 0.5 * np.log(2 * np.pi * np.e * (yt.var() + 1e-12))
-        etas.append(mi / (hy + 1e-12))
-
-    return float(np.nanmean(etas))
 
 
 def horizon_rmse(y_true, y_pred):
@@ -385,17 +379,17 @@ def run_loso_cv(dataset_raw, model_gen, M=20, H=3, stride=1,
             patience=5,
         )
 
-        all_preds, all_targets = predict_forecasting_model(
+        all_preds = predict_forecasting_model(
             model,
             X_te,
-            Y=Y_te,
             batch_size=batch_size,
             device=device,
         )
+        all_targets = Y_te
 
         model_r = compute_rmse(all_targets, all_preds)
         naive_r = compute_naive_rmse(X_te, Y_te)
-        eta = compute_eta(all_targets, all_preds)
+        eta = compute_eta_gauss(all_targets, all_preds)
 
         print(f"\nResults:")
         print(f"  MODEL RMSE  : {model_r:.6f}")

@@ -2,6 +2,7 @@ import numpy as np
 from utils.measures import compute_di_from_log_prob_api
 
 def generate_coupled_gaussian(N=20000, M=3, a=0.8, sigma=0.5, seed=0):
+    """Generates a simple coupled Gaussian process with known DI."""
     rng = np.random.default_rng(seed)
 
     # Need M history points plus 1 future target

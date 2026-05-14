@@ -1,4 +1,4 @@
-# Module containing information theoretic measures
+# Module containing information theoretic measures and error metrics
 import numpy as np
 from tqdm.auto import tqdm
 
@@ -40,6 +40,119 @@ def make_reduced_input(X, source_roi, mode="zero", rng=None):
 
 def safe_log(x, eps=1e-12):
     return np.log(np.maximum(x, eps))
+
+# ============================================================
+# Metrics and losses
+# ============================================================
+
+def compute_rmse(y_true, y_pred):
+    return float(np.sqrt(np.mean((y_true - y_pred) ** 2)))
+
+# TODO: add
+def compute_rrmse(y_true, y_pred):
+    pass
+
+# ============================================================
+# Entropy, Conditional Enttropy and Information Content
+# ============================================================
+
+def compute_entropy():
+    pass
+
+def compute_cond_entropy():
+    pass
+
+def compute_eta_gauss(y_true, y_pred):
+    """
+    Information-theoretic information content (eta in the paper) with guassian assumption computed per ROI and averaged.
+    """
+    if y_true.ndim == 3:
+        y_true = y_true.reshape(-1, y_true.shape[-1])
+        y_pred = y_pred.reshape(-1, y_pred.shape[-1])
+
+    n_roi = y_true.shape[1]
+    etas = []
+
+    for roi in range(n_roi):
+        yt = y_true[:, roi]
+        yp = y_pred[:, roi]
+
+        if yt.std() < 1e-8 or yp.std() < 1e-8:
+            continue
+
+        r = np.corrcoef(yt, yp)[0, 1]
+        r = np.clip(r, -1 + 1e-7, 1 - 1e-7)
+
+        mi = -0.5 * np.log(1 - r ** 2)
+        hy = 0.5 * np.log(2 * np.pi * np.e * (yt.var() + 1e-12))
+        etas.append(mi / (hy + 1e-12))
+
+    return float(np.nanmean(etas))
+
+def compute_marginal_entropy_histogram(
+    Y,
+    horizon_idx=0,
+    n_bins=50,
+    eps=1e-12,
+):
+    """
+    Non-Gaussian plug-in estimate of per-ROI marginal entropy H(Y_r).
+
+    Returns entropy in nats.
+    """
+    Y = np.asarray(Y, dtype=np.float32)
+    Yh = Y[:, horizon_idx, :]   # (N, R)
+
+    R = Yh.shape[1]
+    H = np.zeros(R, dtype=np.float32)
+
+    for r in range(R):
+        y = Yh[:, r]
+
+        hist, _ = np.histogram(y, bins=n_bins, density=False)
+        p = hist.astype(np.float64)
+        p = p / (p.sum() + eps)
+
+        p = p[p > 0]
+        H[r] = -np.sum(p * np.log(p + eps))
+
+    return H
+
+def compute_conditional_entropy_from_log_prob_api(
+    model,
+    X,
+    Y,
+    horizon_idx=0,
+    batch_size=512,
+):
+    """
+    Estimate per-ROI conditional entropy H(Y_r | X)
+    using the model predictive distribution.
+
+    Returns entropy in nats.
+    """
+    X = np.asarray(X, dtype=np.float32)
+    Y = np.asarray(Y, dtype=np.float32)
+
+    _, _, R = Y.shape
+
+    pred = model.predict_proba(X, Y=Y, batch_size=batch_size)
+
+    H_cond = np.zeros(R, dtype=np.float32)
+
+    for r in range(R):
+        y = Y[:, horizon_idx, r]
+
+        logp = extract_log_prob(
+            pred=pred,
+            y=y,
+            roi_idx=r,
+            horizon_idx=horizon_idx,
+        )
+
+        H_cond[r] = -np.nanmean(logp)
+
+    return H_cond
 
 
 # ============================================================
@@ -396,5 +509,6 @@ def fit_histogram_proba_adapter(
         flatten_input=flatten_input,
         flatten_output=flatten_output,
     )
+
 
 
