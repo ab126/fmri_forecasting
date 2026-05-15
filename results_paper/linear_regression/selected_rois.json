@@ -1,0 +1,7 @@
+{
+  "best_roi": 11,
+  "median_roi": 17,
+  "worst_roi": 8,
+  "selection_metric": "pve",
+  "future_std_cutoff": 0.9079530596733093
+}

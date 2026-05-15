@@ -1,0 +1,47 @@
+Transformer fMRI forecasting report outputs
+============================================================
+
+Dataset / windowing
+- Root dir: data/pooled_stratified_share
+- Raw runs loaded: 2144
+- Train runs: 1440
+- Test runs: 704
+- Train subjects: ['subjoVC0sHUB_P', 'subjqFdsBbuiHF', 'subjtySNgRhV65', 'subjxpYwO4azeZ']
+- Test subjects: ['subjOenz4SHyaO', 'subjQX6R7rImeb']
+- M: 50
+- H: 3
+- Stride: 1
+- Number of ROIs: 19
+
+Model
+- Architecture: Transformer encoder
+- d_model: 64
+- nhead: 4
+- num_layers: 2
+- dropout: 0.1
+- trainable parameters: 570,489
+
+Forecasting metrics
+- RMSE: 0.800141
+- Naive RMSE: 0.991941
+- RMSSE: 1.008910
+- PVE: 0.268235
+- Overall correlation: 0.518774
+- Beat naive: True
+- Train time minutes: 9.53
+
+Horizon RMSE
+- Step 1: 0.701431
+- Step 2: 0.827229
+- Step 3: 0.862764
+
+ROI examples
+- Best ROI by PVE: 11
+- Median ROI by PVE: 7
+- Worst ROI by PVE: 8
+
+Empirical information metrics
+- Mean empirical MI: 0.177182
+- Mean empirical entropy: 2.200716
+- Mean normalized empirical MI: 0.081517
+- Cross-ROI empirical MI matrix similarity: 0.813255

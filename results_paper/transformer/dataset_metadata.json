@@ -1,0 +1,40 @@
+{
+  "root_dir": "data/pooled_stratified_share",
+  "num_raw_runs": 2144,
+  "train_runs": 1440,
+  "test_runs": 704,
+  "train_subjects": [
+    "subjoVC0sHUB_P",
+    "subjqFdsBbuiHF",
+    "subjtySNgRhV65",
+    "subjxpYwO4azeZ"
+  ],
+  "test_subjects": [
+    "subjOenz4SHyaO",
+    "subjQX6R7rImeb"
+  ],
+  "X_train_shape": [
+    250560,
+    50,
+    19
+  ],
+  "Y_train_shape": [
+    250560,
+    3,
+    19
+  ],
+  "X_test_shape": [
+    122496,
+    50,
+    19
+  ],
+  "Y_test_shape": [
+    122496,
+    3,
+    19
+  ],
+  "load_seconds": 0.9746670722961426,
+  "M": 50,
+  "H": 3,
+  "stride": 1
+}

@@ -1,0 +1,32 @@
+{
+  "root_dir": "data/pooled_stratified_share",
+  "num_runs_loaded": 2144,
+  "num_train_runs": 1440,
+  "num_test_runs": 704,
+  "X_train_shape": [
+    250560,
+    50,
+    19
+  ],
+  "Y_train_shape": [
+    250560,
+    3,
+    19
+  ],
+  "X_test_shape": [
+    122496,
+    50,
+    19
+  ],
+  "Y_test_shape": [
+    122496,
+    3,
+    19
+  ],
+  "n_roi": 19,
+  "M": 50,
+  "H": 3,
+  "stride": 1,
+  "test_ratio": 0.2,
+  "random_state": 42
+}

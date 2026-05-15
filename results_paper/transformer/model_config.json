@@ -1,0 +1,12 @@
+{
+  "model": "Transformer",
+  "n_roi": 19,
+  "M": 50,
+  "H": 3,
+  "d_model": 64,
+  "nhead": 4,
+  "num_layers": 2,
+  "dropout": 0.1,
+  "total_parameters": 570489,
+  "trainable_parameters": 570489
+}

@@ -1,0 +1,17 @@
+{
+  "model": "Linear Regression Ridge",
+  "M": 50,
+  "H": 3,
+  "stride": 1,
+  "n_roi": 19,
+  "alpha": 1.0,
+  "rmse": 0.7993267774581909,
+  "naive_rmse": 0.9919413924217224,
+  "rmsse": 1.0084228515625,
+  "pve": 0.2698324918746948,
+  "corr": 0.5198772194350881,
+  "mean_empirical_mi_true_pred": 0.17787908990290002,
+  "mean_empirical_entropy": 2.20071616743358,
+  "beat_naive": true,
+  "train_time_minutes": 0.011054317156473795
+}

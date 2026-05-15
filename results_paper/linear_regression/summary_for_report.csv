@@ -1,0 +1,2 @@
+model,M,H,stride,n_roi,alpha,rmse,naive_rmse,rmsse,pve,corr,mean_empirical_mi_true_pred,mean_empirical_entropy,beat_naive,train_time_minutes
+Linear Regression Ridge,50,3,1,19,1.0,0.7993267774581909,0.9919413924217224,1.0084228515625,0.2698324918746948,0.5198772194350881,0.17787908990290002,2.20071616743358,True,0.011054317156473795
