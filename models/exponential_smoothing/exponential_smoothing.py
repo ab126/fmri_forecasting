@@ -2,10 +2,6 @@ import numpy as np
 from statsmodels.tsa.holtwinters import ExponentialSmoothing
 
 
-def zscore_per_roi(timeseries):
-    mean = timeseries.mean(axis=1, keepdims=True)
-    std = timeseries.std(axis=1, keepdims=True)
-    return (timeseries - mean) / (std + 1e-8)
 
 
 def compute_scaled_mse(train_series, y_true, y_pred):
@@ -53,7 +49,7 @@ def fit_exp_smoothing_and_forecast(
 
     return np.asarray(forecast, dtype=np.float32), fit
 
-
+# TODO: Come back after Transformer
 class ExponentialSmoothingForecaster:
     """
     Forecasting API compatible with the shared LOSO pipeline.

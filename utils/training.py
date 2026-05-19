@@ -2,6 +2,7 @@ import copy
 import pandas as pd
 import numpy as np
 from tqdm.auto import tqdm
+from pathlib import Path
 
 import torch
 import torch.nn as nn
@@ -56,11 +57,27 @@ class DeltaAwareLoss(nn.Module):
         return base_loss + self.alpha * delta_loss
 
 
-def train_model(model, train_loader, val_loader=None, num_epochs=30, device=None, patience=5, verbose=True):
+def train_model(
+    model,
+    train_loader,
+    val_loader=None,
+    num_epochs=30,
+    device=None,
+    patience=5,
+    checkpoint_dir=None,
+    checkpoint_prefix="forecast_model",
+    checkpoint_every=None,
+    save_best=True,
+    save_last=False,
+    verbose=True
+):
     if device is None:
         device = torch.device("cpu")
     elif isinstance(device, str):
         device = torch.device(device)
+
+    if type(checkpoint_dir) is str:
+        checkpoint_dir = Path(checkpoint_dir)
 
     optimizer = torch.optim.AdamW(
         model.parameters(), lr=5e-4, weight_decay=1e-5
@@ -74,6 +91,23 @@ def train_model(model, train_loader, val_loader=None, num_epochs=30, device=None
     best_val_loss = float("inf")
     patience_counter = 0
     best_state = None
+
+    def _save_checkpoint(path, epoch, train_loss, val_loss=None, is_best=False):
+        if checkpoint_dir is None:
+            return
+        torch.save(
+            {
+                "epoch": epoch,
+                "model_state_dict": model.state_dict(),
+                "optimizer_state_dict": optimizer.state_dict(),
+                "scheduler_state_dict": scheduler.state_dict(),
+                "train_loss": train_loss,
+                "val_loss": val_loss,
+                "best_val_loss": best_val_loss,
+                "is_best": is_best,
+            },
+            path,
+        )
 
     for epoch in range(num_epochs):
         model.train()
@@ -109,16 +143,61 @@ def train_model(model, train_loader, val_loader=None, num_epochs=30, device=None
                 best_val_loss = val_loss
                 best_state = {k: v.clone() for k, v in model.state_dict().items()}
                 patience_counter = 0
+
+                if save_best and checkpoint_dir is not None:
+                    _save_checkpoint(
+                        checkpoint_dir / f"{checkpoint_prefix}_best.pt",
+                        epoch=epoch + 1,
+                        train_loss=avg_loss,
+                        val_loss=val_loss,
+                        is_best=True,
+                    )
             else:
                 patience_counter += 1
                 if verbose:
                     print(f"  No improvement ({patience_counter}/{patience})")
                 if patience_counter >= patience:
-                    print(f"  Early stopping at epoch {epoch+1}")
+                    if verbose:
+                        print(f"  Early stopping at epoch {epoch+1}")
                     break
         else:
             if verbose:
                 print(f"  Epoch {epoch+1:2d} | train loss: {avg_loss:.6f}")
+            
+            if avg_loss < best_val_loss:
+                best_val_loss = avg_loss
+                best_state = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
+
+                if save_best and checkpoint_dir is not None:
+                    _save_checkpoint(
+                        checkpoint_dir / f"{checkpoint_prefix}_best.pt",
+                        epoch=epoch + 1,
+                        train_loss=avg_loss,
+                        val_loss=None,
+                        is_best=True,
+                    )
+        if (
+            checkpoint_dir is not None
+            and checkpoint_every is not None
+            and checkpoint_every > 0
+            and (epoch + 1) % checkpoint_every == 0
+        ):
+            _save_checkpoint(
+                checkpoint_dir / f"{checkpoint_prefix}_epoch{epoch+1:03d}.pt",
+                epoch=epoch + 1,
+                train_loss=avg_loss,
+                val_loss=val_loss if val_loader is not None else None,
+                is_best=False,
+            )
+        
+        if save_last and checkpoint_dir is not None:
+            _save_checkpoint(
+                checkpoint_dir / f"{checkpoint_prefix}_last.pt",
+                epoch=epoch + 1,
+                train_loss=avg_loss,
+                val_loss=val_loss if val_loader is not None else None,
+                is_best=False,
+            )
 
     if best_state is not None:
         model.load_state_dict(best_state)
@@ -162,6 +241,13 @@ def compute_naive_rmse(X_test, Y_test):
     return compute_rmse(Y_test, naive_preds)
 
 
+def compute_rmsse(y_true, y_pred): 
+    """Root Mean Squared Scaled Error (RMSSE) for multi-step forecasts."""
+    numerator = np.mean((y_true - y_pred) ** 2)
+    denominator = np.mean((y_true[:, 1:, :] - y_true[:, :-1, :]) ** 2) + 1e-8
+    return float(np.sqrt(numerator / denominator))
+
+
 def _is_torch_model(model):
     return isinstance(model, nn.Module)
 
@@ -193,8 +279,10 @@ def _reshape_predictions(preds, target_shape):
         f"Could not reshape predictions from {preds.shape} to {target_shape}"
     )
 
+
 def _expects_windowed_input(model):
     return getattr(model, "expects_windowed_input", False)
+
 
 def _clone_model(model):
     """Best-effort clone for either PyTorch modules or sklearn estimators."""
@@ -210,9 +298,14 @@ def train_forecasting_model(
     X_val=None,
     Y_val=None,
     batch_size=512,
-    num_epochs=10,
+    num_epochs=30,
     device=None,
     patience=5,
+    checkpoint_dir=None,
+    checkpoint_prefix="forecast_model",
+    checkpoint_every=None,
+    save_best=True,
+    save_last=False,
     verbose=True
 ):
     """
@@ -241,7 +334,12 @@ def train_forecasting_model(
             num_epochs=num_epochs,
             device=device,
             patience=patience,
-            verbose=verbose
+            checkpoint_dir=checkpoint_dir,
+            checkpoint_prefix=checkpoint_prefix,
+            checkpoint_every=checkpoint_every,
+            save_best=save_best,
+            save_last=save_last,
+            verbose=verbose,
         )
 
     if hasattr(model, "fit") and hasattr(model, "predict"):

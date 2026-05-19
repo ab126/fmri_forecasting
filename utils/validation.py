@@ -10,7 +10,7 @@ from utils.measures import compute_eta_gauss
 
 from models.transformer.transformer_api_library import transformer_model_generator
 from models.lstm.lstm_model_library import alstm_model_generator
-from models.linear_regression.linear_regression_core import linear_regression_generator
+from fmri_forecasting.models.linear_regression.linear import linear_regression_generator
 from models.exponential_smoothing.exponential_smoothing_core import exponential_smoothing_generator
 
 model_path = Path("saves") / "trained_model_weights" / "transformer_final_vc.pt"
