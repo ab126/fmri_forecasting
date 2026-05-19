@@ -8,12 +8,13 @@ from tqdm.auto import tqdm
 from utils.training import train_forecasting_model, predict_forecasting_model
 from utils.measures import compute_eta_gauss
 
-from models.transformer.transformer_api_library import transformer_model_generator
-from models.lstm.lstm_model_library import alstm_model_generator
-from fmri_forecasting.models.linear_regression.linear import linear_regression_generator
-from models.exponential_smoothing.exponential_smoothing_core import exponential_smoothing_generator
+from fmri_forecasting.models.transformer import transformer_model_generator
+from fmri_forecasting.models.lstm import alstm_model_generator
+from fmri_forecasting.models.linear import linear_regression_generator
+from fmri_forecasting.models.exponential_smoothing import exponential_smoothing_generator
 
 model_path = Path("saves") / "trained_model_weights" / "transformer_final_vc.pt"
+
 
 def load_model_from_weights_save(weights_path, model_str=None, device=None):
     """Loads the model weights from the specified state save path."""

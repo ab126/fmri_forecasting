@@ -35,7 +35,7 @@ from fmri_forecasting.utils.parse_data import parse_dataset
 from fmri_forecasting.utils.training import train_forecasting_model
 from fmri_forecasting.utils.measures import FlowPredictorAPI, fit_histogram_proba_adapter, compute_di_from_log_prob_api
 
-from fmri_forecasting.models.transformer.transformer_api_library import transformer_model_generator, TransformerPredictorAPI
+from fmri_forecasting.models.transformer.transformer import transformer_model_generator, TransformerPredictorAPI
 
 
 data_path = Path(args.data_path)
