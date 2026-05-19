@@ -1,3 +1,12 @@
+"""
+LSTM-based neural forecaster and inference wrapper for fMRI ROI windows.
+
+``AdvancedLSTM`` is the trainable model used by ``utils.training.run_loso_cv``.
+It consumes normalized sliding windows shaped ``(N, M, ROI)`` and predicts the
+next ``H`` ROI frames shaped ``(N, H, ROI)``. ``FmriPredictorAPI`` is a
+sklearn-compatible inference wrapper for already-trained LSTM models.
+"""
+
 import torch
 import torch.nn as nn
 import numpy as np
@@ -9,7 +18,25 @@ from utils.training import FMRIWindowDataset
 class AdvancedLSTM(nn.Module):
     """
     Multi-layer LSTM for multi-step fMRI BOLD forecasting.
-    Takes a sequence of M past ROI vectors and predicts H future steps.
+
+    Parameters
+    ----------
+    input_size:
+        Number of ROI features per time point.
+    hidden_size:
+        LSTM hidden-state width.
+    num_layers:
+        Number of stacked recurrent layers.
+    output_horizon:
+        Number of future time points to predict.
+    dropout:
+        Dropout used between LSTM layers.
+
+    Notes
+    -----
+    The forward pass expects ``x`` shaped ``(batch, M, input_size)`` and returns
+    ``(batch, output_horizon, input_size)``. The final hidden state from the top
+    LSTM layer is projected to the full forecast window.
     """
     def __init__(self, input_size, hidden_size=512, num_layers=3, output_horizon=5, dropout=0.5):
         super().__init__()
@@ -28,6 +55,7 @@ class AdvancedLSTM(nn.Module):
         self.fc = nn.Linear(hidden_size, output_horizon * input_size)
 
     def forward(self, x):
+        """Run one batched forward pass from input windows to forecast windows."""
         # x shape: (batch, seq_len, input_size)
         _, (h_n, _) = self.lstm(x)
 
@@ -41,8 +69,12 @@ class AdvancedLSTM(nn.Module):
 # TODO: Make it compatible with DI computation api
 class FmriPredictorAPI(BaseEstimator, RegressorMixin):
     """
-    Scikit-Learn compatible API for the fMRI LSTM model .
-    Encapsulates preprocessing (tensor conversion) and inference.
+    sklearn-compatible inference API for a trained ``AdvancedLSTM``.
+
+    This wrapper is intended for downstream tools that expect ``fit`` and
+    ``predict`` methods, such as directed-information utilities or notebooks.
+    It does not train the wrapped model; training is handled by
+    ``utils.training.train_forecasting_model`` / ``run_loso_cv``.
     """
     def __init__(self, model_obj=None, M=50, H=3, device='cpu'):
         self.model_obj = model_obj
@@ -88,7 +120,14 @@ class FmriPredictorAPI(BaseEstimator, RegressorMixin):
 
 def alstm_model_generator(n_roi, H):
     """
-    Caller for fresh model generator. Returns a new instance of the model.
+    Create a fresh ``AdvancedLSTM`` for one training or CV fold.
+
+    Parameters
+    ----------
+    n_roi:
+        Number of ROI features in each time point.
+    H:
+        Number of forecast steps to emit.
     """
 
     return AdvancedLSTM(

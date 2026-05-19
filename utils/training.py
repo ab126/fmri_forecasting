@@ -1,4 +1,5 @@
 import copy
+import inspect
 import pandas as pd
 import numpy as np
 from tqdm.auto import tqdm
@@ -78,6 +79,8 @@ def train_model(
 
     if type(checkpoint_dir) is str:
         checkpoint_dir = Path(checkpoint_dir)
+    if checkpoint_dir is not None:
+        checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
     optimizer = torch.optim.AdamW(
         model.parameters(), lr=5e-4, weight_decay=1e-5
@@ -381,6 +384,30 @@ def predict_forecasting_model(model, X, batch_size=512, device=None):
     )
 
 
+def _make_model(model_gen, n_roi=None, M=None, H=None):
+    """
+    Instantiate model_gen while preserving compatibility with zero-arg notebook
+    lambdas and newer factories that accept fold dimensions.
+    """
+    try:
+        signature = inspect.signature(model_gen)
+    except (TypeError, ValueError):
+        return model_gen()
+
+    kwargs = {}
+    for name in signature.parameters:
+        if name in {"n_roi", "input_size", "input_dim"} and n_roi is not None:
+            kwargs[name] = n_roi
+        elif name in {"M", "window_size"} and M is not None:
+            kwargs[name] = M
+        elif name in {"H", "output_horizon", "horizon"} and H is not None:
+            kwargs[name] = H
+
+    if kwargs:
+        return model_gen(**kwargs)
+    return model_gen()
+
+
 def horizon_rmse(y_true, y_pred):
     """Compute and print RMSE separately for each forecast step."""
     horizon_scores = []
@@ -393,7 +420,10 @@ def horizon_rmse(y_true, y_pred):
 
 
 def run_loso_cv(dataset_raw, model_gen, M=20, H=3, stride=1,
-                num_epochs=20, batch_size=512, device=device):
+                num_epochs=20, batch_size=512, device=device,
+                checkpoint_dir=None, checkpoint_prefix="forecast_model",
+                checkpoint_every=None, save_best=True, save_last=False,
+                results_path="loso_results.csv", patience=5):
     """
     Leave-One-Subject-Out Cross Validation (LOSO-CV).
 
@@ -410,6 +440,9 @@ def run_loso_cv(dataset_raw, model_gen, M=20, H=3, stride=1,
         best_X_test        - test windows of the best eta fold
         best_Y_test        - test targets of the best eta fold
     """
+    if checkpoint_dir is not None:
+        checkpoint_dir = Path(checkpoint_dir)
+        checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
     subjects = sorted(set(d["subject"] for d in dataset_raw))
     n_subjects = len(subjects)
@@ -429,6 +462,7 @@ def run_loso_cv(dataset_raw, model_gen, M=20, H=3, stride=1,
     best_eta_subject = None
     best_X_test = None
     best_Y_test = None
+    best_n_roi = None
 
     for fold_i, test_subj in enumerate(tqdm(subjects, desc="LOSO Folds")):
         print(f"\nFold {fold_i+1}/{n_subjects} | Test subject: {test_subj}")
@@ -457,14 +491,18 @@ def run_loso_cv(dataset_raw, model_gen, M=20, H=3, stride=1,
               f"| Test windows: {len(X_te)} | ROIs: {n_roi}")
 
         try:
-            model = model_gen()
+            model = _make_model(model_gen, n_roi=n_roi, M=M, H=H)
             if _is_torch_model(model):
                 model = model.to(device)
         except AttributeError as e:
             print(f"Model is not CUDA compatible: {e}\nContinuing with CPU...")
-            model = model_gen()
+            model = _make_model(model_gen, n_roi=n_roi, M=M, H=H)
 
-        print(f"Training (max {num_epochs} epochs, early stopping patience=5)...")
+        fold_checkpoint_dir = None
+        if checkpoint_dir is not None and _is_torch_model(model):
+            fold_checkpoint_dir = checkpoint_dir
+
+        print(f"Training (max {num_epochs} epochs, early stopping patience={patience})...")
         model = train_forecasting_model(
             model,
             X_tr,
@@ -474,7 +512,12 @@ def run_loso_cv(dataset_raw, model_gen, M=20, H=3, stride=1,
             batch_size=batch_size,
             num_epochs=num_epochs,
             device=device,
-            patience=5,
+            patience=patience,
+            checkpoint_dir=fold_checkpoint_dir,
+            checkpoint_prefix=f"{checkpoint_prefix}_fold{fold_i+1:02d}_{test_subj}",
+            checkpoint_every=checkpoint_every,
+            save_best=save_best,
+            save_last=save_last,
         )
 
         all_preds = predict_forecasting_model(
@@ -483,6 +526,7 @@ def run_loso_cv(dataset_raw, model_gen, M=20, H=3, stride=1,
             batch_size=batch_size,
             device=device,
         )
+        all_preds = _reshape_predictions(all_preds, Y_te.shape)
         all_targets = Y_te
 
         model_r = compute_rmse(all_targets, all_preds)
@@ -495,7 +539,7 @@ def run_loso_cv(dataset_raw, model_gen, M=20, H=3, stride=1,
         print(f"  eta        : {eta:.4f}")
         print(f"  Beat naive : {'YES' if model_r < naive_r else 'NO'}")
 
-        horizon_rmse(all_targets, all_preds)
+        hor_rmse = horizon_rmse(all_targets, all_preds)
 
         fold_results.append({
             "test_subject": test_subj,
@@ -515,6 +559,7 @@ def run_loso_cv(dataset_raw, model_gen, M=20, H=3, stride=1,
             best_eta_model = _clone_model(model)
             best_X_test = X_te.copy()
             best_Y_test = Y_te.copy()
+            best_n_roi = n_roi
             print(f"  New best eta model saved: {test_subj} (eta={eta:.4f})")
 
         del X_tr, Y_tr, X_val, Y_val
@@ -526,18 +571,26 @@ def run_loso_cv(dataset_raw, model_gen, M=20, H=3, stride=1,
     print(f"{'='*60}")
 
     df = pd.DataFrame(fold_results)
+    if df.empty:
+        raise ValueError(
+            "LOSO-CV produced no valid folds. Check subject count and window "
+            f"settings M={M}, H={H}, stride={stride}."
+        )
     print(df.to_string(index=False))
     print(f"\nMean Model RMSE  : {df['Model_RMSE'].mean():.6f}")
     print(f"Mean Naive RMSE : {df['Naive_RMSE'].mean():.6f}")
     print(f"Mean eta        : {df['eta'].mean():.4f}")
     print(f"Folds beat naive: {df['beat_naive'].sum()} / {len(df)}")
 
-    df.to_csv("loso_results.csv", index=False)
-    print("\nResults saved to loso_results.csv")
+    if results_path is not None:
+        results_path = Path(results_path)
+        results_path.parent.mkdir(parents=True, exist_ok=True)
+        df.to_csv(results_path, index=False)
+        print(f"\nResults saved to {results_path}")
 
     print(f"\nBest eta fold : {best_eta_subject} (eta={best_eta_score:.4f})")
 
-    best_model = model_gen()
+    best_model = _make_model(model_gen, n_roi=best_n_roi, M=M, H=H)
     if _is_torch_model(best_model):
         best_model = best_model.to(device)
         if best_eta_model is not None:

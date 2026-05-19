@@ -1,11 +1,22 @@
+"""
+Simple non-parametric forecasting baselines for fMRI ROI windows.
+
+These estimators are compatible with the shared forecasting pipeline and expect
+unflattened input windows shaped ``(N, M, ROI)``. They provide useful reference
+models for interpreting whether learned forecasters beat basic persistence or
+window-average behavior.
+"""
+
 import numpy as np
 
 
 class LastValueForecaster:
     """
-    Predicts that all future values equal the final observed frame.
+    Persistence baseline that repeats the final observed ROI frame.
 
-    Compatible with the shared forecasting pipeline.
+    ``fit`` records the window and ROI dimensions but learns no parameters.
+    ``predict`` returns an array shaped ``(N, H, ROI)`` where every forecast
+    step equals ``X[:, -1, :]``.
     """
 
     expects_windowed_input = True
@@ -17,11 +28,15 @@ class LastValueForecaster:
 
     def fit(self, X, y=None):
         """
-        X expected shape:
-            (N, M,  ROI)
+        Validate and record input dimensions.
 
-        y expected shape:
-            (N, H, ROI)
+        Parameters
+        ----------
+        X:
+            Input windows shaped ``(N, M, ROI)``.
+        y:
+            Optional targets shaped ``(N, H, ROI)``; accepted for estimator
+            compatibility but not used.
         """
         X = np.asarray(X, dtype=np.float32)
         if X.ndim != 3:
@@ -35,6 +50,7 @@ class LastValueForecaster:
         return self
 
     def predict(self, X):
+        """Repeat the final frame of each input window for all ``H`` steps."""
         X = np.asarray(X, dtype=np.float32)
 
         if X.ndim != 3:
@@ -53,11 +69,16 @@ class LastValueForecaster:
         return preds.astype(np.float32)
 
 def last_value_model_generator(H=1):
+    """Create a fresh last-value baseline for one evaluation or CV fold."""
     return LastValueForecaster(H=H)
 
 class MeanValueForecaster:
     """
-    Predicts the within-window temporal mean for all future steps.
+    Baseline that repeats the temporal mean of each input window.
+
+    ``fit`` records dimensions but learns no parameters. ``predict`` computes
+    the ROI-wise mean over the ``M`` input time points and repeats that frame
+    for each of the ``H`` forecast steps.
     """
     expects_windowed_input = True
 
@@ -67,6 +88,12 @@ class MeanValueForecaster:
         self.window_size = None
 
     def fit(self, X, y=None):
+        """
+        Validate and record input dimensions for estimator compatibility.
+
+        ``y`` is accepted but unused because this baseline is fully determined
+        by the input window at prediction time.
+        """
 
         X = np.asarray(X, dtype=np.float32)
         if X.ndim != 3:
@@ -79,6 +106,7 @@ class MeanValueForecaster:
         return self
 
     def predict(self, X):
+        """Repeat each window's ROI-wise temporal mean for all forecast steps."""
 
         X = np.asarray(X, dtype=np.float32)
 
@@ -99,6 +127,7 @@ class MeanValueForecaster:
 
 
 def mean_value_model_generator(H=1):
+    """Create a fresh mean-value baseline for one evaluation or CV fold."""
     return MeanValueForecaster(H=H)
 
 

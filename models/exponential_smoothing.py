@@ -1,29 +1,16 @@
+"""
+Per-window exponential-smoothing forecaster for fMRI ROI time series.
+
+This module exposes a lightweight sklearn-style adapter used by the shared
+LOSO cross-validation pipeline. Unlike the torch models, the forecaster does
+not learn global parameters during ``fit``. Instead, each call to ``predict``
+fits a separate statsmodels exponential-smoothing model for each ROI in each
+input window, then forecasts ``H`` future time points.
+"""
+
 import numpy as np
 from statsmodels.tsa.holtwinters import ExponentialSmoothing
 
-
-
-
-def compute_scaled_mse(train_series, y_true, y_pred):
-    """
-    M5-style scaled error idea:
-    scale by the in-sample naive one-step squared error.
-
-    train_series: 1D training signal
-    y_true: 1D true future values
-    y_pred: 1D predicted future values
-    """
-    if len(train_series) < 2:
-        return np.nan
-
-    naive_diffs = np.diff(train_series)
-    denom = np.mean(naive_diffs ** 2)
-
-    if denom < 1e-12:
-        return np.nan
-
-    mse = np.mean((y_true - y_pred) ** 2)
-    return mse / denom
 
 
 def fit_exp_smoothing_and_forecast(
@@ -34,7 +21,23 @@ def fit_exp_smoothing_and_forecast(
     seasonal_periods=None,
 ):
     """
-    Fit exponential smoothing to one 1D train series and forecast future steps.
+    Fit one statsmodels exponential-smoothing model and forecast ahead.
+
+    Parameters
+    ----------
+    train_series:
+        One ROI signal from a single window, shaped ``(M,)``.
+    forecast_steps:
+        Number of future samples to forecast.
+    trend, seasonal, seasonal_periods:
+        Passed through to ``statsmodels.tsa.holtwinters.ExponentialSmoothing``.
+
+    Returns
+    -------
+    forecast:
+        Forecast values as ``float32`` with shape ``(forecast_steps,)``.
+    fit:
+        The fitted statsmodels results object, useful for debugging notebooks.
     """
     model = ExponentialSmoothing(
         endog=train_series,
@@ -52,11 +55,16 @@ def fit_exp_smoothing_and_forecast(
 # TODO: Come back after Transformer
 class ExponentialSmoothingForecaster:
     """
-    Forecasting API compatible with the shared LOSO pipeline.
+    sklearn-style adapter for stateless exponential-smoothing forecasts.
 
-    The model is stateless across samples: each prediction fits an
-    exponential-smoothing model per ROI on the provided input window
-    and forecasts the next H steps.
+    ``fit`` receives flattened windows and targets from
+    ``utils.training.train_forecasting_model``. It only infers and stores the
+    window length and ROI count. ``predict`` then reshapes each flattened input
+    back to ``(M, ROI)``, fits one univariate exponential-smoothing model per
+    ROI, and returns flattened predictions shaped ``(N, H * ROI)``.
+
+    If statsmodels cannot fit a particular ROI/window, prediction falls back to
+    repeating the last observed ROI value for that horizon.
     """
 
     def __init__(self, H=1, trend=None, seasonal=None, seasonal_periods=None):
@@ -141,7 +149,13 @@ class ExponentialSmoothingForecaster:
 
 
 def exponential_smoothing_generator(H=1, trend=None, seasonal=None, seasonal_periods=None):
-    """Factory function matching the rest of the framework."""
+    """
+    Create a fresh exponential-smoothing forecaster for one CV fold.
+
+    The returned object follows the estimator interface expected by
+    ``utils.training.run_loso_cv`` but performs per-window fitting at inference
+    time rather than global model training.
+    """
     return ExponentialSmoothingForecaster(
         H=H,
         trend=trend,
@@ -149,57 +163,3 @@ def exponential_smoothing_generator(H=1, trend=None, seasonal=None, seasonal_per
         seasonal_periods=seasonal_periods,
     )
 
-
-def evaluate_one_run(file_path, window_size=30, horizon=1,
-                     trend=None, seasonal=None, seasonal_periods=None,
-                     min_rois=18):
-    """
-    Legacy single-run evaluation helper kept for notebook compatibility.
-    """
-    data = np.load(file_path, allow_pickle=True)
-    ts = data["timeseries"][:min_rois]
-
-    ts = zscore_per_roi(ts)
-
-    num_rois, T = ts.shape
-
-    train_end = T - horizon
-    if train_end <= 5:
-        raise ValueError(f"Run too short for forecasting: {file_path}")
-
-    all_true = []
-    all_pred = []
-    all_mse = []
-    all_scaled_mse = []
-
-    for roi_idx in range(num_rois):
-        roi_series = ts[roi_idx]
-
-        train_series = roi_series[:train_end]
-        test_true = roi_series[train_end: train_end + horizon]
-
-        try:
-            test_pred, _ = fit_exp_smoothing_and_forecast(
-                train_series=train_series,
-                forecast_steps=horizon,
-                trend=trend,
-                seasonal=seasonal,
-                seasonal_periods=seasonal_periods,
-            )
-        except Exception:
-            test_pred = np.repeat(train_series[-1], horizon).astype(np.float32)
-
-        mse = np.mean((test_true - test_pred) ** 2)
-        scaled_mse = compute_scaled_mse(train_series, test_true, test_pred)
-
-        all_true.append(test_true)
-        all_pred.append(test_pred)
-        all_mse.append(mse)
-        all_scaled_mse.append(scaled_mse)
-
-    return {
-        "y_true": np.array(all_true),
-        "y_pred": np.array(all_pred),
-        "roi_mse": np.array(all_mse),
-        "roi_scaled_mse": np.array(all_scaled_mse),
-    }
