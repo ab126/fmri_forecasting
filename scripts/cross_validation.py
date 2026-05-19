@@ -64,7 +64,7 @@ def parse_args():
     parser.add_argument(
         "--data-dir",
         type=Path,
-        default=PROJECT_ROOT / "data" / "train_pooled_stratified_share_vc",
+        default=ROOT / "data" / "train_pooled_stratified_share_vc",
         help="Dataset root containing subject/run .npz files.",
     )
     parser.add_argument("--models", nargs="+", default=None,
@@ -100,10 +100,10 @@ def parse_args():
     parser.add_argument("--dropout", type=float, default=0.1,
                         help="Transformer dropout.")
     parser.add_argument("--output-dir", type=Path,
-                        default=PROJECT_ROOT / "saves" / "results",
+                        default=ROOT / "saves" / "cv-results",
                         help="Directory for CV CSV outputs.")
     parser.add_argument("--checkpoint-dir", type=Path,
-                        default=PROJECT_ROOT / "saves" / "checkpoints",
+                        default=ROOT / "saves" / "checkpoints",
                         help="Directory for torch checkpoints.")
     return parser.parse_args()
 
@@ -123,7 +123,7 @@ def main():
     dataset, detected_device = load_dataset_main(args.data_dir)
     device = detected_device if torch.cuda.is_available() else torch.device("cpu")
 
-    train_items, holdout_items = split_by_subject(
+    train_items, holdout_items = split_by_subject( # 
         dataset,
         test_ratio=args.test_ratio,
         random_state=args.random_state,
@@ -181,9 +181,10 @@ def main():
     summary = combined.groupby("model", as_index=False).agg(
         mean_model_rmse=("Model_RMSE", "mean"),
         mean_naive_rmse=("Naive_RMSE", "mean"),
+        mean_model_rmsse=("Model_RMSSE", "mean"),
         mean_eta=("eta", "mean"),
         folds_beat_naive=("beat_naive", "sum"),
-        n_folds=("beat_naive", "count"),
+        n_folds=("Model_RMSE", "count"),
     )
     summary_path = args.output_dir / "all_models_loso_summary.csv"
     summary.to_csv(summary_path, index=False)

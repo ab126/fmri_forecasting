@@ -238,6 +238,7 @@ def compute_rmse(y_true, y_pred):
     return float(np.sqrt(np.mean((y_true - y_pred) ** 2)))
 
 
+# TODO: Remove this. Naive rmse should be called via compute_rmse for the "naive model"
 def compute_naive_rmse(X_test, Y_test):
     """Naive baseline: repeat last observed frame for all H future steps."""
     naive_preds = np.repeat(X_test[:, -1:, :], Y_test.shape[1], axis=1)
@@ -419,6 +420,7 @@ def horizon_rmse(y_true, y_pred):
     return horizon_scores
 
 
+# TODO: Change it so that naive model is run once. You can add it as another instance of a "model"
 def run_loso_cv(dataset_raw, model_gen, M=20, H=3, stride=1,
                 num_epochs=20, batch_size=512, device=device,
                 checkpoint_dir=None, checkpoint_prefix="forecast_model",
@@ -531,6 +533,7 @@ def run_loso_cv(dataset_raw, model_gen, M=20, H=3, stride=1,
 
         model_r = compute_rmse(all_targets, all_preds)
         naive_r = compute_naive_rmse(X_te, Y_te)
+        model_rmsse = compute_rmsse(all_targets, all_preds)
         eta = compute_eta_gauss(all_targets, all_preds)
 
         print(f"\nResults:")
@@ -545,6 +548,7 @@ def run_loso_cv(dataset_raw, model_gen, M=20, H=3, stride=1,
             "test_subject": test_subj,
             "Model_RMSE": round(model_r, 6),
             "Naive_RMSE": round(naive_r, 6),
+            "Model_RMSSE": round(model_rmsse, 6),
             "eta": round(eta, 4),
             "beat_naive": model_r < naive_r,
         })
@@ -580,6 +584,7 @@ def run_loso_cv(dataset_raw, model_gen, M=20, H=3, stride=1,
     print(f"\nMean Model RMSE  : {df['Model_RMSE'].mean():.6f}")
     print(f"Mean Naive RMSE : {df['Naive_RMSE'].mean():.6f}")
     print(f"Mean eta        : {df['eta'].mean():.4f}")
+    print(f"Mean RMSSE       : {df['Model_RMSSE'].mean():.6f}")
     print(f"Folds beat naive: {df['beat_naive'].sum()} / {len(df)}")
 
     if results_path is not None:
