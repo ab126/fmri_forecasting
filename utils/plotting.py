@@ -4,6 +4,7 @@ import seaborn as sns
 
 from matplotlib.colors import Normalize
 from matplotlib.cm import ScalarMappable
+from pathlib import Path
 
 import torch
 
@@ -218,50 +219,80 @@ def plot_proba_forecast(
     if ax is None:
         _, ax = plt.subplots(figsize=figsize)
 
+    # Color palette
+    colors = sns.color_palette("colorblind")
+
+    past_c = colors[0]
+    truth_c = colors[1]
+    pred_c = colors[2]
+
+    # Past signal
     ax.plot(
         traces["past_time"],
         traces["past"],
+        color=past_c,
         label="Past Signal",
-        linewidth=2,
-        alpha=0.7,
+        alpha=0.75,
     )
+
+    # Ground truth
     ax.plot(
         traces["future_time"],
         traces["truth"],
         "o-",
+        color=truth_c,
+        markersize=7,
         label="Ground Truth",
-        linewidth=2,
     )
+
+    # Prediction mean
     ax.plot(
         traces["future_time"],
         traces["mean"],
         "o--",
-        label="Prediction Mean",
-        linewidth=2,
+        color=pred_c,
+        markersize=7,
+        label="Prediction",
     )
+
+    # 68% band
     ax.fill_between(
         traces["future_time"],
         traces["lower_68"],
         traces["upper_68"],
+        color=pred_c,
         alpha=0.25,
-        label="Empirical 68% Band",
+        linewidth=0,
+        label="68% Interval",
     )
+
+    # 95% band
     ax.fill_between(
         traces["future_time"],
         traces["lower_95"],
         traces["upper_95"],
-        alpha=0.15,
-        label="Empirical 95% Band",
+        color=pred_c,
+        alpha=0.12,
+        linewidth=0,
+        label="95% Interval",
     )
-    ax.axvline(x=X.shape[1] - 0.5, linestyle="--", label="Forecast Start")
-    ax.set_xlabel("Time Step")
-    ax.set_ylabel("Normalized Signal")
-    ax.set_title(title or f"Empirical Probabilistic Forecast | ROI {roi_idx}")
-    ax.legend()
+
+    ax.axvline(x=X.shape[1] - 0.5, linestyle="--", label="Forecast Start", alpha=0.7,)
+    ax.set_xlabel("Time Step", fontsize=14)
+    ax.set_ylabel("Normalized Signal", fontsize=14)
+    ax.set_title(title or f"Probabilistic Forecast (ROI {roi_idx+1})", fontsize=16)
+    # Cleaner legend
+    ax.legend(
+        loc="best",
+        fontsize=12,
+    )
     ax.grid(True, linestyle=":", alpha=0.7)
+    ax.margins(x=0.02)
     ax.figure.tight_layout()
 
     if save_path is not None:
+        save_path = Path(save_path)
+        save_path.parent.mkdir(parents=True, exist_ok=True)
         ax.figure.savefig(save_path, dpi=300, bbox_inches="tight")
     if show:
         plt.show()
