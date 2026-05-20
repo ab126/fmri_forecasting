@@ -8,6 +8,267 @@ from matplotlib.cm import ScalarMappable
 import torch
 
 
+def compute_residual_quantiles(
+    y_true,
+    y_pred,
+    quantiles=(0.025, 0.16, 0.84, 0.975),
+):
+    """
+    Compute per-ROI residual quantiles for uncertainty bands.
+
+    Parameters
+    ----------
+    y_true, y_pred : array-like, shape (n_samples, horizon, n_roi)
+        Ground-truth and predicted forecast windows.
+    quantiles : iterable of float
+        Quantile levels to estimate from residuals ``y_true - y_pred``.
+
+    Returns
+    -------
+    dict
+        Mapping ``roi_idx -> {"q025": ..., "q16": ..., "q84": ..., "q975": ...}``
+        for the default quantiles.
+    """
+    y_true = np.asarray(y_true)
+    y_pred = np.asarray(y_pred)
+
+    if y_true.shape != y_pred.shape:
+        raise ValueError(
+            f"y_true and y_pred must have the same shape, got "
+            f"{y_true.shape} and {y_pred.shape}"
+        )
+    if y_true.ndim != 3:
+        raise ValueError(
+            "Expected y_true and y_pred with shape "
+            "(n_samples, horizon, n_roi)."
+        )
+
+    labels = {
+        0.025: "q025",
+        0.16: "q16",
+        0.84: "q84",
+        0.975: "q975",
+    }
+    residuals = y_true - y_pred
+    residual_quantiles = {}
+
+    for roi_idx in range(residuals.shape[2]):
+        vals = residuals[:, :, roi_idx].reshape(-1)
+        residual_quantiles[int(roi_idx)] = {
+            labels.get(float(q), f"q{int(q * 1000):03d}"): float(
+                np.quantile(vals, q)
+            )
+            for q in quantiles
+        }
+
+    return residual_quantiles
+
+
+def _as_numpy_forecast(preds, target_shape=None):
+    preds = np.asarray(preds, dtype=np.float32)
+
+    if target_shape is None or preds.shape == target_shape:
+        return preds
+
+    if preds.ndim == 2:
+        return preds.reshape(target_shape)
+
+    raise ValueError(
+        f"Could not reshape predictions from {preds.shape} to {target_shape}"
+    )
+
+
+def predict_from_forecaster(model, X, batch_size=512, device=None, target_shape=None):
+    """
+    Predict forecast windows from either a PyTorch module or predict-style model.
+    """
+    X = np.asarray(X, dtype=np.float32)
+
+    if isinstance(model, torch.nn.Module):
+        if device is None:
+            device = next(model.parameters()).device
+        else:
+            device = torch.device(device)
+
+        model = model.to(device)
+        model.eval()
+
+        preds = []
+        with torch.no_grad():
+            for start in range(0, len(X), batch_size):
+                batch = torch.as_tensor(
+                    X[start:start + batch_size],
+                    dtype=torch.float32,
+                    device=device,
+                )
+                preds.append(model(batch).detach().cpu().numpy())
+
+        return _as_numpy_forecast(np.concatenate(preds, axis=0), target_shape)
+
+    if hasattr(model, "predict"):
+        try:
+            preds = model.predict(X, batch_size=batch_size)
+        except TypeError:
+            preds = model.predict(X)
+        return _as_numpy_forecast(preds, target_shape)
+
+    raise TypeError(
+        "model must be a torch.nn.Module or expose a predict(X) method."
+    )
+
+
+def make_proba_forecast(
+    X,
+    Y,
+    Yhat,
+    roi_idx,
+    sample_idx,
+    residual_quantiles,
+):
+    """
+    Build the single-sample forecast traces and probabilistic uncertainty bands.
+    """
+    X = np.asarray(X)
+    Y = np.asarray(Y)
+    Yhat = np.asarray(Yhat)
+
+    if X.ndim != 3 or Y.ndim != 3 or Yhat.ndim != 3:
+        raise ValueError("X, Y, and Yhat must all be 3D arrays.")
+    if Y.shape != Yhat.shape:
+        raise ValueError(f"Y and Yhat shape mismatch: {Y.shape} != {Yhat.shape}")
+
+    roi_idx = int(roi_idx)
+    sample_idx = int(sample_idx)
+    q = residual_quantiles.get(roi_idx, residual_quantiles.get(str(roi_idx)))
+    if q is None:
+        raise KeyError(f"No residual quantiles found for ROI {roi_idx}.")
+
+    past_time = np.arange(X.shape[1])
+    future_time = np.arange(X.shape[1], X.shape[1] + Y.shape[1])
+    mean = Yhat[sample_idx, :, roi_idx]
+
+    return {
+        "past_time": past_time,
+        "future_time": future_time,
+        "past": X[sample_idx, :, roi_idx],
+        "truth": Y[sample_idx, :, roi_idx],
+        "mean": mean,
+        "lower_68": mean + q["q16"],
+        "upper_68": mean + q["q84"],
+        "lower_95": mean + q["q025"],
+        "upper_95": mean + q["q975"],
+    }
+
+
+def plot_proba_forecast(
+    X,
+    Y,
+    Yhat=None,
+    *,
+    model=None,
+    roi_idx=0,
+    sample_idx=None,
+    residual_quantiles=None,
+    batch_size=512,
+    device=None,
+    ax=None,
+    figsize=(10, 5),
+    title=None,
+    save_path=None,
+    show=True,
+):
+    """
+    Plot a probabilistic forecast with residual uncertainty bands.
+
+    ``Yhat`` can be supplied directly, or ``model`` can be a trained PyTorch
+    module / predict-style forecaster. If ``residual_quantiles`` is omitted,
+    they are estimated from ``Y - Yhat`` across all supplied samples.
+    """
+    X = np.asarray(X)
+    Y = np.asarray(Y)
+
+    if sample_idx is None:
+        sample_idx = np.random.randint(len(X))
+
+    if Yhat is None:
+        if model is None:
+            raise ValueError("Pass either Yhat predictions or a trained model.")
+        Yhat = predict_from_forecaster(
+            model,
+            X,
+            batch_size=batch_size,
+            device=device,
+            target_shape=Y.shape,
+        )
+    else:
+        Yhat = _as_numpy_forecast(Yhat, target_shape=Y.shape)
+
+    if residual_quantiles is None:
+        residual_quantiles = compute_residual_quantiles(Y, Yhat)
+
+    traces = make_proba_forecast(
+        X=X,
+        Y=Y,
+        Yhat=Yhat,
+        roi_idx=roi_idx,
+        sample_idx=sample_idx,
+        residual_quantiles=residual_quantiles,
+    )
+
+    if ax is None:
+        _, ax = plt.subplots(figsize=figsize)
+
+    ax.plot(
+        traces["past_time"],
+        traces["past"],
+        label="Past Signal",
+        linewidth=2,
+        alpha=0.7,
+    )
+    ax.plot(
+        traces["future_time"],
+        traces["truth"],
+        "o-",
+        label="Ground Truth",
+        linewidth=2,
+    )
+    ax.plot(
+        traces["future_time"],
+        traces["mean"],
+        "o--",
+        label="Prediction Mean",
+        linewidth=2,
+    )
+    ax.fill_between(
+        traces["future_time"],
+        traces["lower_68"],
+        traces["upper_68"],
+        alpha=0.25,
+        label="Empirical 68% Band",
+    )
+    ax.fill_between(
+        traces["future_time"],
+        traces["lower_95"],
+        traces["upper_95"],
+        alpha=0.15,
+        label="Empirical 95% Band",
+    )
+    ax.axvline(x=X.shape[1] - 0.5, linestyle="--", label="Forecast Start")
+    ax.set_xlabel("Time Step")
+    ax.set_ylabel("Normalized Signal")
+    ax.set_title(title or f"Empirical Probabilistic Forecast | ROI {roi_idx}")
+    ax.legend()
+    ax.grid(True, linestyle=":", alpha=0.7)
+    ax.figure.tight_layout()
+
+    if save_path is not None:
+        ax.figure.savefig(save_path, dpi=300, bbox_inches="tight")
+    if show:
+        plt.show()
+
+    return ax, residual_quantiles, Yhat
+
+
 
 def plot_single_roi_prediction(model, X_test, Y_test, device,
                                 roi_idx=0, sample_idx=None,
