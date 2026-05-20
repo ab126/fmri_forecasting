@@ -111,6 +111,7 @@ def plot_per_roi_bar(values, roi_labels=None, ylabel="Value", title="", figsize=
     plt.tight_layout()
     plt.show()
 
+
 def plot_entropy_decomposition(
     H_marg,
     H_cond,

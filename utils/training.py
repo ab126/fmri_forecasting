@@ -9,9 +9,14 @@ import torch
 import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
 
-from .measures import compute_eta_gauss
+from .measures import compute_eta_gauss, compute_rmse, compute_rmsse
 
 from .parse_data import split_by_subject, normalize_items, build_sliding_windows
+
+try:
+    from models.naive_models import last_value_model_generator
+except ImportError:
+    from ..models.naive_models import last_value_model_generator
 
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -39,8 +44,28 @@ class DeltaAwareLoss(nn.Module):
     """
     Combined loss: HuberLoss + delta (change) penalty.
 
-    HuberLoss is robust to outliers.
-    Delta term penalizes wrong forecast dynamics between future steps.
+    Combines a robust HuberLoss on absolute values with a penalty on incorrect
+    forecast dynamics (differences between consecutive timesteps). This encourages
+    the model to not only predict accurate values but also preserve the temporal
+    structure and rate of change in the fMRI time series.
+
+    Attributes:
+        alpha (float): Weight for the delta loss term. Controls the trade-off between
+            prediction accuracy and dynamics preservation.
+        base (nn.HuberLoss): Huber loss instance used for both absolute and delta terms.
+
+    Input shapes:
+        - pred: (batch_size, horizon, n_roi) predicted fMRI connectivity values
+        - target: (batch_size, horizon, n_roi) ground truth fMRI connectivity values
+
+    Output:
+        - scalar tensor: weighted combination of base loss and delta loss
+
+    Example:
+        >>> criterion = DeltaAwareLoss(alpha=0.3, delta=0.5)
+        >>> pred = torch.randn(32, 5, 100)  # batch=32, horizon=5, n_roi=100
+        >>> target = torch.randn(32, 5, 100)
+        >>> loss = criterion(pred, target)  # returns scalar
     """
 
     def __init__(self, alpha=0.3, delta=0.5):
@@ -234,24 +259,6 @@ def get_predictions(model, loader, device=None):
     return np.concatenate(all_preds, axis=0)
 
 
-def compute_rmse(y_true, y_pred):
-    return float(np.sqrt(np.mean((y_true - y_pred) ** 2)))
-
-
-# TODO: Remove this. Naive rmse should be called via compute_rmse for the "naive model"
-def compute_naive_rmse(X_test, Y_test):
-    """Naive baseline: repeat last observed frame for all H future steps."""
-    naive_preds = np.repeat(X_test[:, -1:, :], Y_test.shape[1], axis=1)
-    return compute_rmse(Y_test, naive_preds)
-
-
-def compute_rmsse(y_true, y_pred): 
-    """Root Mean Squared Scaled Error (RMSSE) for multi-step forecasts."""
-    numerator = np.mean((y_true - y_pred) ** 2)
-    denominator = np.mean((y_true[:, 1:, :] - y_true[:, :-1, :]) ** 2) + 1e-8
-    return float(np.sqrt(numerator / denominator))
-
-
 def _is_torch_model(model):
     return isinstance(model, nn.Module)
 
@@ -420,18 +427,21 @@ def horizon_rmse(y_true, y_pred):
     return horizon_scores
 
 
-# TODO: Change it so that naive model is run once. You can add it as another instance of a "model"
-def run_loso_cv(dataset_raw, model_gen, M=20, H=3, stride=1,
+def run_loso_cv(dataset_raw, model_gen, M=50, H=3, stride=1,
                 num_epochs=20, batch_size=512, device=device,
                 checkpoint_dir=None, checkpoint_prefix="forecast_model",
                 checkpoint_every=None, save_best=True, save_last=False,
-                results_path="loso_results.csv", patience=5):
+                results_path="loso_results.csv", patience=5,
+                compute_naive_rmse=True):
     """
     Leave-One-Subject-Out Cross Validation (LOSO-CV).
 
     Supports both:
     - PyTorch forecasting models with the existing training loop
     - sklearn-style estimators exposing fit(X, y) and predict(X)
+
+    Set ``compute_naive_rmse=False`` when a caller computes the last-value
+    baseline once and joins those scores onto multiple model result tables.
 
     Returns:
         df                 - LOSO summary dataframe
@@ -532,15 +542,36 @@ def run_loso_cv(dataset_raw, model_gen, M=20, H=3, stride=1,
         all_targets = Y_te
 
         model_r = compute_rmse(all_targets, all_preds)
-        naive_r = compute_naive_rmse(X_te, Y_te)
         model_rmsse = compute_rmsse(all_targets, all_preds)
         eta = compute_eta_gauss(all_targets, all_preds)
 
+        naive_r = np.nan
+        beat_naive = pd.NA
+        if compute_naive_rmse:
+            naive_model = last_value_model_generator(H=H)
+            naive_model = train_forecasting_model(
+                naive_model,
+                X_tr,
+                Y_tr,
+                verbose=False,
+            )
+            naive_preds = predict_forecasting_model(
+                naive_model,
+                X_te,
+                batch_size=batch_size,
+                device=device,
+            )
+            naive_preds = _reshape_predictions(naive_preds, Y_te.shape)
+            naive_r = compute_rmse(all_targets, naive_preds)
+            beat_naive = model_r < naive_r
+
         print(f"\nResults:")
         print(f"  MODEL RMSE  : {model_r:.6f}")
-        print(f"  Naive RMSE : {naive_r:.6f}")
+        if compute_naive_rmse:
+            print(f"  Naive RMSE : {naive_r:.6f}")
         print(f"  eta        : {eta:.4f}")
-        print(f"  Beat naive : {'YES' if model_r < naive_r else 'NO'}")
+        if compute_naive_rmse:
+            print(f"  Beat naive : {'YES' if beat_naive else 'NO'}")
 
         hor_rmse = horizon_rmse(all_targets, all_preds)
 
@@ -550,7 +581,7 @@ def run_loso_cv(dataset_raw, model_gen, M=20, H=3, stride=1,
             "Naive_RMSE": round(naive_r, 6),
             "Model_RMSSE": round(model_rmsse, 6),
             "eta": round(eta, 4),
-            "beat_naive": model_r < naive_r,
+            "beat_naive": beat_naive,
         })
 
         last_trained_model = model
@@ -581,11 +612,13 @@ def run_loso_cv(dataset_raw, model_gen, M=20, H=3, stride=1,
             f"settings M={M}, H={H}, stride={stride}."
         )
     print(df.to_string(index=False))
-    print(f"\nMean Model RMSE  : {df['Model_RMSE'].mean():.6f}")
-    print(f"Mean Naive RMSE : {df['Naive_RMSE'].mean():.6f}")
-    print(f"Mean eta        : {df['eta'].mean():.4f}")
-    print(f"Mean RMSSE       : {df['Model_RMSSE'].mean():.6f}")
-    print(f"Folds beat naive: {df['beat_naive'].sum()} / {len(df)}")
+    print(f"\nMean Model RMSE   : {df['Model_RMSE'].mean():.6f}")
+    if compute_naive_rmse:
+        print(f"Mean Naive RMSE     : {df['Naive_RMSE'].mean():.6f}")
+    print(f"Mean eta            : {df['eta'].mean():.4f}")
+    print(f"Mean RMSSE          : {df['Model_RMSSE'].mean():.6f}")
+    if compute_naive_rmse:
+        print(f"Folds beat naive    : {df['beat_naive'].sum()} / {len(df)}")
 
     if results_path is not None:
         results_path = Path(results_path)

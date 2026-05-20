@@ -48,19 +48,15 @@ def safe_log(x, eps=1e-12):
 def compute_rmse(y_true, y_pred):
     return float(np.sqrt(np.mean((y_true - y_pred) ** 2)))
 
-# TODO: add
-def compute_rrmse(y_true, y_pred):
-    pass
+def compute_rmsse(y_true, y_pred):
+    """Root Mean Squared Scaled Error (RMSSE) for multi-step forecasts."""
+    numerator = np.mean((y_true - y_pred) ** 2)
+    denominator = np.mean((y_true[:, 1:, :] - y_true[:, :-1, :]) ** 2) + 1e-8
+    return float(np.sqrt(numerator / denominator))
 
 # ============================================================
 # Entropy, Conditional Enttropy and Information Content
 # ============================================================
-
-def compute_entropy():
-    pass
-
-def compute_cond_entropy():
-    pass
 
 def compute_eta_gauss(y_true, y_pred):
     """
@@ -389,7 +385,7 @@ class FlowPredictorAPI:
         }
   
 
-class HistogramProbaAdapter: # TODO: debug bins, think they are all zero
+class HistogramProbaAdapter: 
     """
     Adds predict_proba to any forecasting model using empirical residual histograms.
 
@@ -461,7 +457,7 @@ def fit_histogram_proba_adapter(
     base_model,
     X_calib,
     Y_calib,
-    n_bins=50,
+    n_bins=100,
     flatten_input=False,
     flatten_output=False,
     eps=1e-6,
@@ -509,6 +505,9 @@ def fit_histogram_proba_adapter(
         flatten_input=flatten_input,
         flatten_output=flatten_output,
     )
+
+
+
 
 
 

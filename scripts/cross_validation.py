@@ -116,6 +116,7 @@ def main():
 
     from utils.parse_data import load_dataset_main, split_by_subject
     from utils.training import run_loso_cv
+    from models.naive_models import last_value_model_generator
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
     args.checkpoint_dir.mkdir(parents=True, exist_ok=True)
@@ -143,12 +144,44 @@ def main():
         dropout=args.dropout,
     )
     selected_models = args.models or list(registry)
-    unknown = sorted(set(selected_models) - set(registry))
+    unknown = sorted(set(selected_models) - set(registry) - {"naive"})
     if unknown:
-        raise ValueError(f"Unknown model(s): {unknown}. Available: {sorted(registry)}")
+        available = sorted(set(registry) | {"naive"})
+        raise ValueError(f"Unknown model(s): {unknown}. Available: {available}")
 
     all_results = []
-    for model_name in selected_models:
+
+    print(f"\n{'#' * 72}")
+    print("Cross-validating model: naive")
+    print(f"{'#' * 72}")
+    naive_df, *_ = run_loso_cv(
+        dataset_raw=train_items,
+        model_gen=lambda n_roi=None, M=None, H=None: last_value_model_generator(H=H),
+        M=args.M,
+        H=args.H,
+        stride=args.stride,
+        num_epochs=args.epochs,
+        batch_size=args.batch_size,
+        device=device,
+        checkpoint_dir=None,
+        checkpoint_prefix="naive",
+        checkpoint_every=None,
+        save_best=False,
+        save_last=False,
+        results_path=None,
+        patience=args.patience,
+        compute_naive_rmse=False,
+    )
+    naive_df["Naive_RMSE"] = naive_df["Model_RMSE"]
+    naive_df["beat_naive"] = False
+    naive_scores = naive_df[["test_subject", "Naive_RMSE"]].copy()
+    naive_df.insert(0, "model", "naive")
+    naive_results_path = args.output_dir / "naive_loso_results.csv"
+    naive_df.to_csv(naive_results_path, index=False)
+    all_results.append(naive_df)
+
+    learned_models = [name for name in selected_models if name != "naive"]
+    for model_name in learned_models:
         print(f"\n{'#' * 72}")
         print(f"Cross-validating model: {model_name}")
         print(f"{'#' * 72}")
@@ -168,10 +201,15 @@ def main():
             checkpoint_every=args.checkpoint_every,
             save_best=True,
             save_last=args.save_last,
-            results_path=model_results_path,
+            results_path=None,
             patience=args.patience,
+            compute_naive_rmse=False,
         )
+        df = df.drop(columns=["Naive_RMSE", "beat_naive"], errors="ignore")
+        df = df.merge(naive_scores, on="test_subject", how="left")
+        df["beat_naive"] = df["Model_RMSE"] < df["Naive_RMSE"]
         df.insert(0, "model", model_name)
+        df.to_csv(model_results_path, index=False)
         all_results.append(df)
 
     combined = pd.concat(all_results, ignore_index=True)
