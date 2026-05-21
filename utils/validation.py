@@ -8,10 +8,10 @@ from tqdm.auto import tqdm
 from utils.training import train_forecasting_model, predict_forecasting_model
 from utils.measures import compute_eta_gauss
 
-from fmri_forecasting.models.transformer import transformer_model_generator
-from fmri_forecasting.models.lstm import alstm_model_generator
-from fmri_forecasting.models.linear import linear_regression_generator
-from fmri_forecasting.models.exponential_smoothing import exponential_smoothing_generator
+from models.transformer import transformer_model_generator
+from models.lstm import alstm_model_generator
+from models.linear import linear_regression_generator
+from models.exponential_smoothing import exponential_smoothing_generator
 
 model_path = Path("saves") / "trained_model_weights" / "transformer_final_vc.pt"
 

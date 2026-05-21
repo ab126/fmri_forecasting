@@ -299,6 +299,8 @@ def main():
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
+    print("Loading dataset and creating train/holdout split...")
+
     x_train, y_train, x_test, y_test, detected_device = parse_dataset(
         root_dir=args.data_dir,
         M=args.M,

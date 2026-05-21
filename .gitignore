@@ -4,3 +4,5 @@ __pycache__/
 *.pyc
 nohup.out
 .ipynb_checkpoints/
+*.zip
+*.tar.gz

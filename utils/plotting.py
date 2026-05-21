@@ -587,3 +587,131 @@ def plot_entropy_decomposition(
 
     return eta_percent
 
+
+def plot_di_mat(
+    DI,
+    figsize=(7, 6),
+    cmap="mako",
+    title="Directed Information Matrix",
+    save_path=None,
+    show=True,
+    dpi=300,
+):
+    """
+    Plot a directed information (DI) matrix in publication-ready style.
+
+    Parameters
+    ----------
+    DI : array-like
+        Directed information matrix of shape (R, R).
+
+    figsize : tuple
+        Figure size.
+
+    cmap : str
+        Matplotlib/seaborn colormap.
+
+    title : str
+        Figure title.
+
+    save_path : str or Path or None
+        Optional save path.
+
+    show : bool
+        Whether to display the figure.
+
+    dpi : int
+        Figure resolution.
+    """
+
+    # -------------------------------------------------
+    # Style
+    # -------------------------------------------------
+    sns.set_theme(
+        style="white",
+        context="paper",
+        font_scale=2.0,
+    )
+
+    # -------------------------------------------------
+    # Data
+    # -------------------------------------------------
+    di_mat = np.abs(np.asarray(DI))
+    n_roi = di_mat.shape[0]
+
+    # ROI labels starting from 1
+    roi_labels = [str(i) for i in range(1, n_roi + 1)]
+
+    # -------------------------------------------------
+    # Figure
+    # -------------------------------------------------
+    fig, ax = plt.subplots(figsize=figsize, dpi=dpi)
+
+    im = ax.imshow(
+        di_mat,
+        cmap=cmap,
+        interpolation="nearest",
+        aspect="equal",
+    )
+
+    # Colorbar
+    cbar = fig.colorbar(
+        im,
+        ax=ax,
+        fraction=0.046,
+        pad=0.04,
+    )
+    cbar.set_label(r"$I(Source \to Target)$ (Nats)", rotation=90)
+
+    # Titles and labels
+    ax.set_title(title, pad=12, weight="bold", fontsize=24)
+    ax.set_xlabel("Target ROI", fontsize=20)
+    ax.set_ylabel("Source ROI", fontsize=20)
+
+    # ROI ticks
+    tick_idx = np.arange(0, n_roi, 2)
+
+    ax.set_xticks(tick_idx)
+    ax.set_yticks(tick_idx)
+
+    ax.set_xticklabels([roi_labels[i] for i in tick_idx], fontsize=11)
+    ax.set_yticklabels([roi_labels[i] for i in tick_idx], fontsize=11)
+
+    # Tick formatting
+    plt.setp(ax.get_xticklabels(), rotation=0)
+    ax.tick_params(axis='both', which='major', length=0)
+
+    # Subtle grid
+    ax.set_xticks(np.arange(-0.5, n_roi, 1), minor=True)
+    ax.set_yticks(np.arange(-0.5, n_roi, 1), minor=True)
+
+    ax.grid(
+        which="minor",
+        color="white",
+        linestyle="-",
+        linewidth=0.5,
+        alpha=0.4,
+    )
+
+    ax.tick_params(which="minor", bottom=False, left=False)
+
+    fig.tight_layout()
+
+    # -------------------------------------------------
+    # Save
+    # -------------------------------------------------
+    if save_path is not None:
+        save_path = Path(save_path)
+        save_path.parent.mkdir(parents=True, exist_ok=True)
+
+        fig.savefig(
+            save_path,
+            dpi=dpi,
+            bbox_inches="tight",
+        )
+
+    if show:
+        plt.show()
+
+    return fig, ax
+
