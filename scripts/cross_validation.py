@@ -156,7 +156,7 @@ def main():
     print(f"{'#' * 72}")
     naive_df, *_ = run_loso_cv(
         dataset_raw=train_items,
-        model_gen=lambda n_roi=None, M=None, H=None: last_value_model_generator(H=H),
+        model_gen=lambda n_roi=None, M=None, H=None: last_value_model_generator(),
         M=args.M,
         H=args.H,
         stride=args.stride,

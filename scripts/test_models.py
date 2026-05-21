@@ -48,8 +48,8 @@ def parse_args():
         nargs="+",
         default=None,
         help=(
-            "Models to evaluate. Defaults to all discovered checkpoint models. "
-            "Use baseline names 'naive' and 'mean' explicitly if desired."
+            "Models to evaluate. Defaults to all registered models plus any "
+            "discovered checkpoint models."
         ),
     )
     parser.add_argument("--M", type=int, default=50, help="Input window length.")
@@ -73,6 +73,18 @@ def parse_args():
         default=512,
         help="Batch size for checkpoint inference.",
     )
+    parser.add_argument(
+        "--epochs",
+        type=int,
+        default=30,
+        help="Max epochs when fitting models without checkpoints.",
+    )
+    parser.add_argument(
+        "--patience",
+        type=int,
+        default=5,
+        help="Early-stopping patience when fitting torch models without checkpoints.",
+    )
     parser.add_argument("--alpha", type=float, default=1.0, help="Ridge alpha.")
     parser.add_argument("--d-model", type=int, default=64,
                         help="Transformer hidden dimension.")
@@ -82,14 +94,6 @@ def parse_args():
                         help="Transformer encoder layers.")
     parser.add_argument("--dropout", type=float, default=0.1,
                         help="Transformer dropout.")
-    parser.add_argument(
-        "--include-trainable-baselines",
-        action="store_true",
-        help=(
-            "Also fit/evaluate sklearn-style linear and exponential_smoothing "
-            "models on the train split. Torch models are still loaded from checkpoints."
-        ),
-    )
     return parser.parse_args()
 
 
@@ -144,8 +148,22 @@ def evaluate_predictions(model_name, y_true, y_pred, source="holdout"):
     }
 
 
-def evaluate_estimator(name, model, x_train, y_train, x_test, y_test, batch_size, device):
+def evaluate_estimator(
+    name,
+    model,
+    x_train,
+    y_train,
+    x_test,
+    y_test,
+    batch_size,
+    device,
+    num_epochs=30,
+    patience=5,
+):
     from utils.training import predict_forecasting_model, train_forecasting_model
+
+    if hasattr(model, "to"):
+        model = model.to(device)
 
     model = train_forecasting_model(
         model,
@@ -153,6 +171,8 @@ def evaluate_estimator(name, model, x_train, y_train, x_test, y_test, batch_size
         y_train,
         batch_size=batch_size,
         device=device,
+        num_epochs=num_epochs,
+        patience=patience,
         verbose=False,
     )
     preds = predict_forecasting_model(
@@ -275,31 +295,21 @@ def main():
 
     from models.naive_models import last_value_model_generator, mean_value_model_generator
     from scripts.cross_validation import build_model_registry
-    from utils.parse_data import (
-        build_sliding_windows,
-        load_dataset_main,
-        normalize_items,
-        split_by_subject,
-    )
+    from utils.parse_data import parse_dataset
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
-    dataset, detected_device = load_dataset_main(args.data_dir)
-    device = detected_device if torch.cuda.is_available() else torch.device("cpu")
-
-    train_items, holdout_items = split_by_subject(
-        dataset,
+    x_train, y_train, x_test, y_test, detected_device = parse_dataset(
+        root_dir=args.data_dir,
+        M=args.M,
+        H=args.H,
+        normalize=True,
+        stride=args.stride,
         test_ratio=args.test_ratio,
         random_state=args.random_state,
         verbose=True,
     )
-    holdout_subjects = sorted({item["subject"] for item in holdout_items})
-    print(f"\nEvaluating on held-out subjects: {holdout_subjects}")
-
-    train_norm = normalize_items(train_items)
-    holdout_norm = normalize_items(holdout_items)
-    x_train, y_train = build_sliding_windows(train_norm, args.M, args.H, args.stride)
-    x_test, y_test = build_sliding_windows(holdout_norm, args.M, args.H, args.stride)
+    device = detected_device if torch.cuda.is_available() else torch.device("cpu")
     if len(x_train) == 0 or len(x_test) == 0:
         raise ValueError(
             "No valid windows for train or holdout split. Check M, H, stride, and data."
@@ -317,42 +327,35 @@ def main():
         dropout=args.dropout,
     )
     checkpoints = discover_checkpoints(args.checkpoint_dir)
-    selected = args.models or sorted(checkpoints)
-    selected = list(dict.fromkeys(selected))
+    evaluation_registry = {
+        "naive": lambda n_roi=None, M=None, H=None: last_value_model_generator(H=H),
+        "mean": lambda n_roi=None, M=None, H=None: mean_value_model_generator(H=H),
+        **registry,
+    }
 
-    available = set(registry) | {"naive", "mean"} | set(checkpoints)
+    selected = args.models or sorted(set(evaluation_registry) | set(checkpoints))
+    selected = list(dict.fromkeys(selected))
+    if "naive" not in selected:
+        selected.insert(0, "naive")
+
+    available = set(evaluation_registry) | set(checkpoints)
     unknown = sorted(set(selected) - available)
     if unknown:
         raise ValueError(f"Unknown model(s): {unknown}. Available: {sorted(available)}")
 
     rows = []
-    baseline_rows = []
-    baseline_models = {
-        "naive": last_value_model_generator(H=args.H),
-        "mean": mean_value_model_generator(H=args.H),
-    }
-    for name, model in baseline_models.items():
-        row = evaluate_estimator(
-            name,
-            model,
-            x_train,
-            y_train,
-            x_test,
-            y_test,
-            batch_size=args.batch_size,
-            device=device,
-        )
-        rows.append(row)
-        baseline_rows.append(row)
-
-    naive_rmse = next(row["Model_RMSE"] for row in baseline_rows if row["model"] == "naive")
+    naive_rmse = None
 
     for model_name in selected:
-        if model_name in baseline_models:
-            continue
-
         model_checkpoints = checkpoints.get(model_name, [])
         if model_checkpoints:
+            if model_name not in registry:
+                print(
+                    f"\nSkipping {model_name}: checkpoint(s) found, but no "
+                    "registered factory can rebuild the model."
+                )
+                continue
+
             print(f"\nEvaluating {len(model_checkpoints)} checkpoint(s) for {model_name}")
             for checkpoint_path in model_checkpoints:
                 rows.append(
@@ -368,25 +371,33 @@ def main():
                 )
             continue
 
-        if args.include_trainable_baselines and model_name in registry:
-            print(f"\nFitting {model_name} on train split for holdout evaluation")
-            rows.append(
-                evaluate_estimator(
-                    model_name,
-                    registry[model_name](n_roi=x_train.shape[2], M=args.M, H=args.H),
-                    x_train,
-                    y_train,
-                    x_test,
-                    y_test,
-                    batch_size=args.batch_size,
-                    device=device,
-                )
-            )
-        else:
-            print(
-                f"\nSkipping {model_name}: no checkpoint found in {args.checkpoint_dir}. "
-                "Use --include-trainable-baselines for sklearn-style models."
-            )
+        model_factory = evaluation_registry.get(model_name)
+        if model_factory is None:
+            print(f"\nSkipping {model_name}: no checkpoint found in {args.checkpoint_dir}.")
+            continue
+
+        print(f"\nFitting {model_name} on train split for holdout evaluation")
+        row = evaluate_estimator(
+            model_name,
+            model_factory(n_roi=x_train.shape[2], M=args.M, H=args.H),
+            x_train,
+            y_train,
+            x_test,
+            y_test,
+            batch_size=args.batch_size,
+            device=device,
+            num_epochs=args.epochs,
+            patience=args.patience,
+        )
+        rows.append(row)
+        if model_name == "naive":
+            naive_rmse = row["Model_RMSE"]
+
+    if naive_rmse is None:
+        naive_rows = [row for row in rows if row["model"] == "naive"]
+        if not naive_rows:
+            raise ValueError("Naive baseline evaluation did not produce a result.")
+        naive_rmse = naive_rows[0]["Model_RMSE"]
 
     for row in rows:
         row["Naive_RMSE"] = naive_rmse
