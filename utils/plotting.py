@@ -283,7 +283,7 @@ def plot_proba_forecast(
     ax.set_title(title or f"Probabilistic Forecast (ROI {roi_idx+1})", fontsize=16)
     # Cleaner legend
     ax.legend(
-        loc="best",
+        loc= "best", # upper left,
         fontsize=12,
     )
     ax.grid(True, linestyle=":", alpha=0.7)
