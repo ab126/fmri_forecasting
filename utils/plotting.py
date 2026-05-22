@@ -661,7 +661,7 @@ def plot_di_mat(
         fraction=0.046,
         pad=0.04,
     )
-    cbar.set_label(r"$I(Source \to Target)$ (Nats)", rotation=90)
+    cbar.set_label(r"$I(Source \to Target)$ (nats)", rotation=90)
 
     # Titles and labels
     ax.set_title(title, pad=12, weight="bold", fontsize=24)
