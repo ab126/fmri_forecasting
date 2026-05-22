@@ -6,6 +6,79 @@ from tqdm.auto import tqdm
 # Basic utilities
 # ============================================================
 
+def fit_value_bin_edges(Y_train, n_bins=100, mode="quantile", eps=1e-6):
+    """
+    Fit fixed target-value bin edges from training targets.
+
+    Y_train: shape (N, H, R)
+    mode:
+        "quantile" -> approximately balanced bins
+        "uniform"  -> equal-width bins
+
+    Returns:
+        bin_edges with shape (H, R, n_bins + 1)
+    """
+    Y_train = np.asarray(Y_train, dtype=np.float32)
+    if Y_train.ndim != 3:
+        raise ValueError(f"Y_train must have shape (N,H,R), got {Y_train.shape}")
+
+    _, H, R = Y_train.shape
+    edges = np.empty((H, R, n_bins + 1), dtype=np.float32)
+
+    for h in range(H):
+        for r in range(R):
+            y = Y_train[:, h, r]
+
+            if mode == "quantile":
+                q = np.linspace(0.0, 1.0, n_bins + 1)
+                e = np.quantile(y, q).astype(np.float32)
+                for k in range(1, len(e)):
+                    if e[k] <= e[k - 1]:
+                        e[k] = e[k - 1] + eps
+            elif mode == "uniform":
+                y_min, y_max = float(np.min(y)), float(np.max(y))
+                if y_max <= y_min:
+                    y_max = y_min + eps
+                e = np.linspace(y_min, y_max, n_bins + 1, dtype=np.float32)
+            else:
+                raise ValueError("mode must be 'quantile' or 'uniform'")
+
+            e[0] -= eps
+            e[-1] += eps
+            edges[h, r, :] = e
+
+    return edges
+
+
+def targets_to_bin_ids(Y, bin_edges):
+    """Map continuous targets shaped (N,H,R) to discrete bin ids."""
+    Y = np.asarray(Y, dtype=np.float32)
+    edges = np.asarray(bin_edges, dtype=np.float32)
+
+    if Y.ndim != 3:
+        raise ValueError(f"Y must have shape (N,H,R), got {Y.shape}")
+    if edges.shape[:2] != Y.shape[1:]:
+        raise ValueError(
+            f"bin_edges first dims must match (H,R)={Y.shape[1:]}, got {edges.shape}"
+        )
+
+    N, H, R = Y.shape
+    n_bins = edges.shape[-1] - 1
+    ids = np.empty((N, H, R), dtype=np.int64)
+
+    for h in range(H):
+        for r in range(R):
+            ids[:, h, r] = np.digitize(Y[:, h, r], edges[h, r]) - 1
+
+    return np.clip(ids, 0, n_bins - 1)
+
+
+def bin_centers(bin_edges):
+    """Return bin centers with shape (H,R,B)."""
+    edges = np.asarray(bin_edges, dtype=np.float32)
+    return 0.5 * (edges[..., :-1] + edges[..., 1:])
+
+
 def make_reduced_input(X, source_roi, mode="zero", rng=None):
     """
     Remove source ROI history from X.
@@ -236,11 +309,15 @@ def extract_log_prob(pred, y, roi_idx, horizon_idx=0):
     Callable style:
         pred["log_prob_fn"](y, roi_idx, horizon_idx)
 
-    Histogram style:
+    Histogram/value-bin style:
         pred["probs"] shape (N, H, R, B)
         pred["bin_edges"] either:
             - shape (B + 1,)
             - shape (R, B + 1)
+            - shape (H, R, B + 1)
+        If pred also contains "mean", bin_edges are interpreted as residual
+        edges around the mean. Otherwise they are interpreted as target-value
+        edges.
 
     Gaussian fallback:
         pred["mean"], pred["std"]
@@ -257,15 +334,19 @@ def extract_log_prob(pred, y, roi_idx, horizon_idx=0):
         probs = pred["probs"][:, horizon_idx, roi_idx, :]
         bin_edges = pred["bin_edges"]
 
-        mu = pred["mean"][:, horizon_idx, roi_idx]
-        residual = y - mu
-
-        if np.asarray(bin_edges).ndim == 2:
-            edges = np.asarray(bin_edges)[roi_idx]
+        bin_edges = np.asarray(bin_edges)
+        if bin_edges.ndim == 3:
+            edges = bin_edges[horizon_idx, roi_idx]
+        elif bin_edges.ndim == 2:
+            edges = bin_edges[roi_idx]
         else:
-            edges = np.asarray(bin_edges)
+            edges = bin_edges
 
-        bin_ids = np.digitize(residual, edges) - 1
+        values_to_bin = y
+        if "mean" in pred:
+            values_to_bin = y - pred["mean"][:, horizon_idx, roi_idx]
+
+        bin_ids = np.digitize(values_to_bin, edges) - 1
         bin_ids = np.clip(bin_ids, 0, probs.shape[1] - 1)
 
         p = probs[np.arange(len(y)), bin_ids]
@@ -286,6 +367,97 @@ def extract_log_prob(pred, y, roi_idx, horizon_idx=0):
 # ============================================================
 # Model Wrapper for DI estimation
 # ============================================================
+
+class DiscreteNeuralPredictorAPI:
+    """
+    DI-compatible API for neural models that emit logits over target-value bins.
+
+    The wrapped torch model must return logits shaped (N, H, R, B), where B is
+    the number of bins. The softmax over the final axis is interpreted as
+    p_theta(Y[h,r] in bin b | X), and observed continuous Y values are mapped
+    to bins using fixed edges fit on training targets.
+    """
+
+    def __init__(self, model_obj, bin_edges, device="cpu", eps=1e-12):
+        import torch
+
+        self.model_obj = model_obj.to(device)
+        self.model_obj.eval()
+        self.device = torch.device(device)
+        self.bin_edges = np.asarray(bin_edges, dtype=np.float32)
+        self.eps = float(eps)
+
+    @property
+    def n_bins(self):
+        return self.bin_edges.shape[-1] - 1
+
+    def predict_logits(self, X, batch_size=512):
+        import torch
+
+        X = np.asarray(X, dtype=np.float32)
+        logits = []
+
+        with torch.no_grad():
+            for start in range(0, len(X), batch_size):
+                end = min(start + batch_size, len(X))
+                xb = torch.tensor(X[start:end], dtype=torch.float32).to(self.device)
+                out = self.model_obj(xb)
+                logits.append(out.detach().cpu().numpy())
+
+        logits = np.concatenate(logits, axis=0)
+        if logits.ndim != 4:
+            raise ValueError(
+                "DiscreteNeuralPredictorAPI expects model output logits shaped "
+                f"(N,H,R,B), got {logits.shape}"
+            )
+        if logits.shape[1:3] != self.bin_edges.shape[:2]:
+            raise ValueError(
+                "Model logits horizon/ROI dimensions must match bin_edges first "
+                f"dimensions. Got logits {logits.shape} and bin_edges {self.bin_edges.shape}"
+            )
+        if logits.shape[-1] != self.n_bins:
+            raise ValueError(
+                f"Model emitted {logits.shape[-1]} bins, but bin_edges define {self.n_bins}"
+            )
+
+        return logits
+
+    def predict_proba(self, X, Y=None, batch_size=512):
+        import torch
+
+        logits = self.predict_logits(X, batch_size=batch_size)
+        probs = torch.softmax(torch.tensor(logits), dim=-1).numpy().astype(np.float32)
+
+        out = {
+            "probs": probs,
+            "bin_edges": self.bin_edges,
+        }
+
+        if Y is not None:
+            y_bins = targets_to_bin_ids(Y, self.bin_edges)
+            log_prob = np.log(
+                np.take_along_axis(probs, y_bins[..., None], axis=-1)[..., 0]
+                + self.eps
+            ).astype(np.float32)
+            out["log_prob"] = log_prob
+
+        return out
+
+    def predict(self, X, batch_size=512):
+        """
+        Deterministic summary forecast from the discrete predictive distribution.
+
+        DI uses predict_proba/log_prob; this posterior mean is mainly useful for
+        quick forecast inspection or RMSE-style diagnostics.
+        """
+        probs = self.predict_proba(X, batch_size=batch_size)["probs"]
+        centers = bin_centers(self.bin_edges)
+        return np.sum(probs * centers[None, ...], axis=-1).astype(np.float32)
+
+    def log_prob_next(self, X, Y, batch_size=512):
+        return self.predict_proba(X, Y=Y, batch_size=batch_size)["log_prob"]
+
+
 class FlowPredictorAPI:
     """
     Likelihood wrapper for torch forecasters.
