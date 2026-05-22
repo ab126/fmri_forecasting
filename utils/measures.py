@@ -10,13 +10,29 @@ def fit_value_bin_edges(Y_train, n_bins=100, mode="quantile", eps=1e-6):
     """
     Fit fixed target-value bin edges from training targets.
 
-    Y_train: shape (N, H, R)
-    mode:
-        "quantile" -> approximately balanced bins
-        "uniform"  -> equal-width bins
+    This helper is intended for neural models whose final layer emits logits
+    over value bins. The returned edges define the discrete support used both
+    during binned-likelihood training and later when continuous observed
+    targets are mapped back to bins for log-probability evaluation.
 
-    Returns:
-        bin_edges with shape (H, R, n_bins + 1)
+    Parameters
+    ----------
+    Y_train : array-like, shape (N, H, R)
+        Training targets. Fit these edges on training/calibration data only, not
+        held-out test targets.
+    n_bins : int, default=100
+        Number of bins per horizon and ROI.
+    mode : {"quantile", "uniform"}, default="quantile"
+        ``"quantile"`` creates approximately balanced bins. ``"uniform"``
+        creates equal-width bins between the observed min and max.
+    eps : float, default=1e-6
+        Padding for outer edges and minimum increment used to break quantile
+        ties.
+
+    Returns
+    -------
+    np.ndarray, shape (H, R, n_bins + 1)
+        Bin edges indexed by forecast horizon, ROI, then edge id.
     """
     Y_train = np.asarray(Y_train, dtype=np.float32)
     if Y_train.ndim != 3:
@@ -51,7 +67,22 @@ def fit_value_bin_edges(Y_train, n_bins=100, mode="quantile", eps=1e-6):
 
 
 def targets_to_bin_ids(Y, bin_edges):
-    """Map continuous targets shaped (N,H,R) to discrete bin ids."""
+    """
+    Map continuous multi-step targets to integer value-bin labels.
+
+    Parameters
+    ----------
+    Y : array-like, shape (N, H, R)
+        Continuous target values to discretize.
+    bin_edges : array-like, shape (H, R, B + 1)
+        Per-horizon/per-ROI bin edges, typically from ``fit_value_bin_edges``.
+
+    Returns
+    -------
+    np.ndarray, shape (N, H, R)
+        Integer bin ids in ``[0, B - 1]``. Values outside the fitted edge range
+        are clipped to the closest edge bin.
+    """
     Y = np.asarray(Y, dtype=np.float32)
     edges = np.asarray(bin_edges, dtype=np.float32)
 
@@ -74,7 +105,20 @@ def targets_to_bin_ids(Y, bin_edges):
 
 
 def bin_centers(bin_edges):
-    """Return bin centers with shape (H,R,B)."""
+    """
+    Compute bin centers from per-horizon/per-ROI bin edges.
+
+    Parameters
+    ----------
+    bin_edges : array-like, shape (..., B + 1)
+        Bin edges along the final axis.
+
+    Returns
+    -------
+    np.ndarray, shape (..., B)
+        Midpoints between adjacent edges. For ``(H, R, B + 1)`` input this is
+        shaped ``(H, R, B)``.
+    """
     edges = np.asarray(bin_edges, dtype=np.float32)
     return 0.5 * (edges[..., :-1] + edges[..., 1:])
 
@@ -370,46 +414,90 @@ def extract_log_prob(pred, y, roi_idx, horizon_idx=0):
 
 class DiscreteNeuralPredictorAPI:
     """
-    DI-compatible API for neural models that emit logits over target-value bins.
+    DI-compatible API for neural forecast models.
 
-    The wrapped torch model must return logits shaped (N, H, R, B), where B is
-    the number of bins. The softmax over the final axis is interpreted as
-    p_theta(Y[h,r] in bin b | X), and observed continuous Y values are mapped
-    to bins using fixed edges fit on training targets.
+    Preferred discrete mode:
+        The wrapped torch model returns logits shaped ``(N, H, R, B)``, where
+        ``B`` is the number of target-value bins. ``softmax(logits)`` is treated
+        as ``p_theta(Y[h,r] in bin b | X)``, and observed continuous targets are
+        mapped to bins using ``bin_edges``.
+
+    Backward-compatible point-forecast mode:
+        If the wrapped model returns deterministic forecasts shaped
+        ``(N, H, R)``, this adapter falls back to the same calibrated Gaussian
+        likelihood used by ``FlowPredictorAPI``. In that case call
+        ``fit_residual_std(X_calib, Y_calib)`` before DI estimation, or pass
+        ``residual_std`` to ``__init__``.
     """
 
-    def __init__(self, model_obj, bin_edges, device="cpu", eps=1e-12):
+    def __init__(self, model_obj, bin_edges=None, device="cpu", residual_std=None, eps=1e-12):
+        """
+        Wrap a trained torch forecasting model for ``compute_di_from_log_prob_api``.
+
+        Parameters
+        ----------
+        model_obj : torch.nn.Module
+            Trained model. It may emit either discrete logits ``(N,H,R,B)`` or
+            point forecasts ``(N,H,R)``.
+        bin_edges : array-like, shape (H, R, B + 1), optional
+            Target-value bin edges required for discrete-logit models. Not used
+            for point-forecast Gaussian fallback mode.
+        device : str or torch.device, default="cpu"
+            Device used for model inference.
+        residual_std : array-like, optional
+            Calibrated residual standard deviation for point-forecast fallback.
+            Shape may be ``(H,R)`` or ``(R,)``.
+        eps : float, default=1e-12
+            Numerical floor added before taking logs and variances.
+        """
         import torch
 
         self.model_obj = model_obj.to(device)
         self.model_obj.eval()
         self.device = torch.device(device)
-        self.bin_edges = np.asarray(bin_edges, dtype=np.float32)
+        self.bin_edges = None if bin_edges is None else np.asarray(bin_edges, dtype=np.float32)
+        self.residual_std = residual_std
         self.eps = float(eps)
 
     @property
     def n_bins(self):
+        if self.bin_edges is None:
+            raise ValueError("n_bins is only defined when bin_edges are provided.")
         return self.bin_edges.shape[-1] - 1
 
-    def predict_logits(self, X, batch_size=512):
+    def _predict_model_output(self, X, batch_size=512):
+        """Run batched torch inference and return the raw model output as numpy."""
         import torch
 
         X = np.asarray(X, dtype=np.float32)
-        logits = []
+        outputs = []
 
         with torch.no_grad():
             for start in range(0, len(X), batch_size):
                 end = min(start + batch_size, len(X))
                 xb = torch.tensor(X[start:end], dtype=torch.float32).to(self.device)
                 out = self.model_obj(xb)
-                logits.append(out.detach().cpu().numpy())
+                outputs.append(out.detach().cpu().numpy())
 
-        logits = np.concatenate(logits, axis=0)
+        return np.concatenate(outputs, axis=0)
+
+    def predict_logits(self, X, batch_size=512):
+        """
+        Return discrete predictive logits shaped ``(N,H,R,B)``.
+
+        This method is only valid for models with a binned/discrete output head.
+        For legacy deterministic models that return ``(N,H,R)``, use
+        ``predict`` or ``predict_proba`` after calibrating residuals.
+        """
+        logits = self._predict_model_output(X, batch_size=batch_size)
         if logits.ndim != 4:
             raise ValueError(
-                "DiscreteNeuralPredictorAPI expects model output logits shaped "
-                f"(N,H,R,B), got {logits.shape}"
+                "predict_logits requires model output shaped (N,H,R,B). "
+                f"Got {logits.shape}; this looks like a point-forecast model. "
+                "Use predict()/fit_residual_std()/predict_proba() for Gaussian fallback."
             )
+        if self.bin_edges is None:
+            raise ValueError("bin_edges are required when model output is shaped (N,H,R,B).")
         if logits.shape[1:3] != self.bin_edges.shape[:2]:
             raise ValueError(
                 "Model logits horizon/ROI dimensions must match bin_edges first "
@@ -422,10 +510,90 @@ class DiscreteNeuralPredictorAPI:
 
         return logits
 
+    def fit_residual_std(self, X_calib, Y_calib, batch_size=512):
+        """
+        Calibrate Gaussian residual scale for point-forecast fallback mode.
+
+        Use this only when the wrapped model emits deterministic predictions
+        shaped ``(N,H,R)``. Discrete-logit models do not need residual
+        calibration because their likelihood is read directly from their output
+        probabilities.
+
+        Parameters
+        ----------
+        X_calib : array-like, shape (N, M, R)
+            Calibration input windows.
+        Y_calib : array-like, shape (N, H, R)
+            Calibration targets aligned with ``X_calib``.
+        batch_size : int, default=512
+            Inference batch size.
+
+        Returns
+        -------
+        DiscreteNeuralPredictorAPI
+            Returns ``self`` for notebook-style chaining.
+        """
+        mean = self.predict(X_calib, batch_size=batch_size)
+        resid = np.asarray(Y_calib, dtype=np.float32) - mean
+        self.residual_std = np.std(resid, axis=0) + self.eps
+        return self
+
     def predict_proba(self, X, Y=None, batch_size=512):
+        """
+        Return predictive distribution information for DI estimation.
+
+        For discrete-logit models this returns ``{"probs", "bin_edges"}``, plus
+        ``"log_prob"`` when ``Y`` is provided. For point-forecast models this
+        returns Gaussian ``"log_prob"`` using calibrated ``residual_std`` and
+        therefore requires ``Y``.
+        """
         import torch
 
-        logits = self.predict_logits(X, batch_size=batch_size)
+        raw = self._predict_model_output(X, batch_size=batch_size)
+
+        if raw.ndim == 3:
+            if Y is None:
+                raise ValueError("Y is required to evaluate log p(Y | X).")
+            if self.residual_std is None:
+                raise ValueError(
+                    "Wrapped model returned point forecasts shaped (N,H,R), not "
+                    "discrete logits. Call prob_model.fit_residual_std(X_calib, "
+                    "Y_calib) first, pass residual_std, or use a model with a "
+                    "discrete output head shaped (N,H,R,B)."
+                )
+
+            Y = np.asarray(Y, dtype=np.float32)
+            std = np.asarray(self.residual_std, dtype=np.float32)
+            if std.ndim == 1:
+                std = std.reshape(1, -1)
+
+            var = std[None, :, :] ** 2 + self.eps
+            log_prob = (
+                -0.5 * np.log(2 * np.pi * var)
+                -0.5 * ((Y - raw) ** 2 / var)
+            ).astype(np.float32)
+
+            return {"log_prob": log_prob, "mean": raw, "std": np.sqrt(var).astype(np.float32)}
+
+        if raw.ndim != 4:
+            raise ValueError(
+                "DiscreteNeuralPredictorAPI expects model output shaped either "
+                f"(N,H,R,B) for discrete logits or (N,H,R) for point forecasts, got {raw.shape}"
+            )
+        if self.bin_edges is None:
+            raise ValueError("bin_edges are required when model output is shaped (N,H,R,B).")
+
+        logits = raw
+        if logits.shape[1:3] != self.bin_edges.shape[:2]:
+            raise ValueError(
+                "Model logits horizon/ROI dimensions must match bin_edges first "
+                f"dimensions. Got logits {logits.shape} and bin_edges {self.bin_edges.shape}"
+            )
+        if logits.shape[-1] != self.n_bins:
+            raise ValueError(
+                f"Model emitted {logits.shape[-1]} bins, but bin_edges define {self.n_bins}"
+            )
+
         probs = torch.softmax(torch.tensor(logits), dim=-1).numpy().astype(np.float32)
 
         out = {
@@ -445,20 +613,33 @@ class DiscreteNeuralPredictorAPI:
 
     def predict(self, X, batch_size=512):
         """
-        Deterministic summary forecast from the discrete predictive distribution.
+        Return deterministic forecasts.
 
-        DI uses predict_proba/log_prob; this posterior mean is mainly useful for
-        quick forecast inspection or RMSE-style diagnostics.
+        For point-forecast models this is the raw model output ``(N,H,R)``. For
+        discrete-logit models this is the posterior mean under the learned
+        binned predictive distribution.
         """
-        probs = self.predict_proba(X, batch_size=batch_size)["probs"]
+        raw = self._predict_model_output(X, batch_size=batch_size)
+        if raw.ndim == 3:
+            return raw.astype(np.float32)
+        if raw.ndim != 4:
+            raise ValueError(
+                "Expected model output shaped either (N,H,R) or (N,H,R,B), "
+                f"got {raw.shape}"
+            )
+        if self.bin_edges is None:
+            raise ValueError("bin_edges are required to summarize discrete logits.")
+
+        probs = torch.softmax(torch.tensor(raw), dim=-1).numpy().astype(np.float32)
         centers = bin_centers(self.bin_edges)
         return np.sum(probs * centers[None, ...], axis=-1).astype(np.float32)
 
     def log_prob_next(self, X, Y, batch_size=512):
+        """Return ``log p(Y | X)`` shaped ``(N,H,R)`` for either adapter mode."""
         return self.predict_proba(X, Y=Y, batch_size=batch_size)["log_prob"]
 
 
-class FlowPredictorAPI:
+class SecondOrderPredictorAPI:
     """
     Likelihood wrapper for torch forecasters.
 

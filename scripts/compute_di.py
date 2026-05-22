@@ -33,7 +33,7 @@ reduction_mode = args.reduction_mode
 
 from fmri_forecasting.utils.parse_data import parse_dataset
 from fmri_forecasting.utils.training import train_forecasting_model
-from fmri_forecasting.utils.measures import FlowPredictorAPI, fit_histogram_proba_adapter, compute_di_from_log_prob_api
+from fmri_forecasting.utils.measures import SecondOrderPredictorAPI, fit_histogram_proba_adapter, compute_di_from_log_prob_api
 
 from fmri_forecasting.models.transformer.transformer import transformer_model_generator, TransformerPredictorAPI
 
@@ -74,7 +74,7 @@ Y = np.concatenate([Y_train, Y_test], axis=0)
 
 # Pick DI Computation Method
 if method=="flow":
-    di_model = FlowPredictorAPI(
+    di_model = SecondOrderPredictorAPI(
         model_obj=model,
         device=device,
     )
