@@ -24,7 +24,7 @@ import json
 from nilearn import datasets
 from sklearn.model_selection import train_test_split
 
-from utils.connectivity import compute_rs_graph
+from .connectivity import compute_rs_graph
 
 # S3 database definitions
 BUCKET = "natural-scenes-dataset"
