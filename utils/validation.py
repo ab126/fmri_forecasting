@@ -18,19 +18,29 @@ model_path = Path("saves") / "trained_model_weights" / "transformer_final_vc.pt"
 
 
 def load_model_from_weights_save(weights_path, model_str=None, device=None):
-    """Loads the model weights from the specified state save path."""
+    """Loads a saved forecasting model."""
+
+    weights_path = Path(weights_path)
 
     if model_str is None:
-        model_str = weights_path.stem
-        model_str = model_str.split('_')[0]
+        model_str = weights_path.stem.split("_")[0]
 
+    # ------------------------------------------------------------------
+    # sklearn/joblib models
+    # ------------------------------------------------------------------
+    if weights_path.suffix == ".joblib":
+        return joblib.load(weights_path)
+
+    # ------------------------------------------------------------------
+    # torch checkpoints
+    # ------------------------------------------------------------------
     obj = torch.load(weights_path, map_location="cpu")
 
     if model_str == "transformer":
         model = transformer_model_generator(
-            n_roi=obj['n_roi'],
-            M=obj['M'],
-            H=obj['H'],
+            n_roi=obj["n_roi"],
+            M=obj["M"],
+            H=obj["H"],
             d_model=64,
             nhead=4,
             num_layers=2,
@@ -42,26 +52,22 @@ def load_model_from_weights_save(weights_path, model_str=None, device=None):
 
         model.load_state_dict(obj["model_state_dict"])
         model.eval()
-        best_val_loss = obj["best_val_loss"]
 
     elif model_str == "lstm":
-        model = alstm_model_generator(n_roi=obj['n_roi'], H=obj['H'])
+        model = alstm_model_generator(
+            n_roi=obj["n_roi"],
+            H=obj["H"]
+        )
 
         if device is not None:
             model.to(device)
 
         model.load_state_dict(obj["model_state_dict"])
         model.eval()
-        best_val_loss = obj["best_val_loss"]
-
-    elif model_str == "linear":
-
-        model = joblib.load(weights_path)
 
     elif model_str == "exponential_smoothing":
-
-        model = exponential_smoothing_generator( # problem with optimization step
-            H=obj['H'],
+        model = exponential_smoothing_generator(
+            H=obj["H"],
             trend="add",
             seasonal=None,
             seasonal_periods=None,
@@ -69,9 +75,9 @@ def load_model_from_weights_save(weights_path, model_str=None, device=None):
 
     else:
         raise ValueError(f"Unknown model type: {model_str}")
-    
+
     return model
-    
+
 
 def permutation_forecast_test(
     model_gen,
