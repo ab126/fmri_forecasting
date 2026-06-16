@@ -409,7 +409,7 @@ def extract_log_prob(pred, y, roi_idx, horizon_idx=0):
 
 
 # ============================================================
-# Model Wrapper for DI estimation
+# Model Wrappers for DI estimation
 # ============================================================
 
 class DiscreteNeuralPredictorAPI:

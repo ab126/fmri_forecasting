@@ -240,7 +240,7 @@ def load_dataset_main(root_dir=None):
     return dataset, device
 
 
-def parse_dataset(root_dir=None, M=50, H=3, normalize=True, stride=1, test_ratio=0.2, test_subjects=None, random_state=42, verbose=True):
+def parse_dataset(root_dir=None, M=50, H=3, normalize=True, stride=1, test_ratio=0.2, test_subjects=None, random_state=42, verbose=True, phase_randomize=False, phase_randomize_seed=123):
     """
     Main function to load, normalize, window, and split the dataset for forecasting.
     
@@ -273,6 +273,11 @@ def parse_dataset(root_dir=None, M=50, H=3, normalize=True, stride=1, test_ratio
         Random seed for reproducible subject splitting.
     verbose : bool, default=True
         If True, print detailed progress information during processing.
+    phase_randomize : bool, default=False
+        If True, apply phase randomization to the timeseries data for null model generation.
+    phase_randomize_seed : int, default=123
+        Random seed for phase randomization. Only used if phase_randomize is True.
+        
     
     Returns
     -------
@@ -302,14 +307,21 @@ def parse_dataset(root_dir=None, M=50, H=3, normalize=True, stride=1, test_ratio
     else:
         normalized_data = dataset
 
-    if verbose:
-        print("Building sliding windows...")
-    # X, Y = build_sliding_windows(normalized_data, M, H, stride)
+    if phase_randomize:
+        if verbose:
+            print("Applying phase randomization...")
+        normalized_data = phase_randomize_dataset(
+            normalized_data,
+            seed=phase_randomize_seed,
+            same_phase_across_rois=False
+        )
 
     if verbose:
         print("Splitting by subject...")
     train_items, test_items = split_by_subject(normalized_data, test_ratio, test_subjects, random_state)
 
+    if verbose:
+        print("Building sliding windows...")
     X_train, Y_train = build_sliding_windows(train_items, M, H, stride)
     X_test, Y_test = build_sliding_windows(test_items, M, H, stride)
 
@@ -319,4 +331,84 @@ def parse_dataset(root_dir=None, M=50, H=3, normalize=True, stride=1, test_ratio
     return X_train, Y_train, X_test, Y_test, device
 
 
+# Phase Randomization
+def phase_randomize_timeseries(ts, rng=None, same_phase_across_rois=False):
+    """
+    Phase-randomize a run-level ROI time series.
+
+    Parameters
+    ----------
+    ts : array, shape (T, R)
+        Time by ROI matrix.
+    rng : np.random.Generator
+    same_phase_across_rois : bool
+        False: randomize each ROI independently.
+        True : use the same random phase shifts across ROIs, preserving more cross-ROI phase structure.
+
+    Returns
+    -------
+    ts_surr : array, shape (T, R)
+        Phase-randomized surrogate with approximately preserved mean, variance,
+        and power spectrum per ROI.
+    """
+    ts = np.asarray(ts, dtype=np.float64)
+
+    if ts.ndim != 2:
+        raise ValueError(f"Expected shape (T, R), got {ts.shape}")
+
+    if rng is None:
+        rng = np.random.default_rng(0)
+
+    T, R = ts.shape
+
+    # Remove mean before FFT, restore after inverse FFT
+    mean = ts.mean(axis=0, keepdims=True)
+    x = ts - mean
+
+    # Real FFT along time
+    Xf = np.fft.rfft(x, axis=0)
+    amp = np.abs(Xf)
+
+    n_freq = Xf.shape[0]
+
+    # Random phases
+    if same_phase_across_rois:
+        phases = rng.uniform(0, 2 * np.pi, size=(n_freq, 1))
+        phases = np.repeat(phases, R, axis=1)
+    else:
+        phases = rng.uniform(0, 2 * np.pi, size=(n_freq, R))
+
+    # Preserve DC phase
+    phases[0, :] = 0.0
+
+    # Preserve Nyquist phase for even-length signals
+    if T % 2 == 0:
+        phases[-1, :] = 0.0
+
+    Xf_surr = amp * np.exp(1j * phases)
+
+    ts_surr = np.fft.irfft(Xf_surr, n=T, axis=0)
+    ts_surr = ts_surr + mean
+
+    return ts_surr.astype(np.float32)
+
+
+def phase_randomize_dataset(dataset, seed=0, same_phase_across_rois=False):
+    """
+    Apply phase randomization to each run in the loaded dataset.
+    Keeps subject labels and ROI labels unchanged.
+    """
+    rng = np.random.default_rng(seed)
+    surrogate = []
+
+    for item in dataset:
+        new_item = copy.deepcopy(item)
+        new_item["timeseries"] = phase_randomize_timeseries(
+            item["timeseries"],
+            rng=rng,
+            same_phase_across_rois=same_phase_across_rois,
+        )
+        surrogate.append(new_item)
+
+    return surrogate
 
