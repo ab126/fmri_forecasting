@@ -278,13 +278,14 @@ def plot_proba_forecast(
     )
 
     ax.axvline(x=X.shape[1] - 0.5, linestyle="--", label="Forecast Start", alpha=0.7,)
-    ax.set_xlabel("Time Step", fontsize=14)
-    ax.set_ylabel("Normalized Signal", fontsize=14)
-    ax.set_title(title or f"Probabilistic Forecast (ROI {roi_idx+1})", fontsize=16)
+    ax.set_xlabel("Time Step", fontsize=18)
+    ax.set_ylabel("Normalized Signal", fontsize=18)
+    ax.set_title(title or f"ROI {roi_idx+1}", fontsize=20)
     # Cleaner legend
     ax.legend(
-        loc= "best", # upper left,
-        fontsize=12,
+        loc= "upper left",
+        bbox_to_anchor=(0, 1.10),
+        fontsize=13,
     )
     ax.grid(True, linestyle=":", alpha=0.7)
     ax.margins(x=0.02)
@@ -293,7 +294,7 @@ def plot_proba_forecast(
     if save_path is not None:
         save_path = Path(save_path)
         save_path.parent.mkdir(parents=True, exist_ok=True)
-        ax.figure.savefig(save_path, dpi=300, bbox_inches="tight")
+        ax.figure.savefig(save_path, dpi=600, bbox_inches="tight")
     if show:
         plt.show()
 

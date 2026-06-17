@@ -144,7 +144,7 @@ def evaluate_predictions(model_name, y_true, y_pred, source="holdout"):
         "source": source,
         "Model_RMSE": round(compute_rmse(y_true, y_pred), 6),
         "Model_RMSSE": round(compute_rmsse(y_true, y_pred), 6),
-        "eta": round(compute_eta_gauss(y_true, y_pred), 4),
+        "eta_gauss": round(compute_eta_gauss(y_true, y_pred), 4),
     }
 
 
@@ -214,7 +214,7 @@ def summarize_results(rows):
         rmses = [float(row["Model_RMSE"]) for row in model_rows]
         naive_rmses = [float(row["Naive_RMSE"]) for row in model_rows]
         rmsses = [float(row["Model_RMSSE"]) for row in model_rows]
-        etas = [float(row["eta"]) for row in model_rows]
+        etas_gauss = [float(row["eta_gauss"]) for row in model_rows]
 
         rmse_mean = sum(rmses) / len(rmses)
         if len(rmses) > 1:
@@ -229,7 +229,7 @@ def summarize_results(rows):
             "std_model_rmse": round(rmse_std, 6) if not math.isnan(rmse_std) else "",
             "mean_naive_rmse": round(sum(naive_rmses) / len(naive_rmses), 6),
             "mean_model_rmsse": round(sum(rmsses) / len(rmsses), 6),
-            "mean_eta": round(sum(etas) / len(etas), 4),
+            "mean_eta_gauss": round(sum(etas_gauss) / len(etas_gauss), 4),
             "evaluations_beat_naive": sum(bool(row["beat_naive"]) for row in model_rows),
             "n_evaluations": len(model_rows),
         })
