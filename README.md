@@ -1,5 +1,7 @@
 # fMRI Connectivity Forecasting
 
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.20341604.svg)](https://doi.org/10.5281/zenodo.20341604)
+
 This repository contains code and notebooks for forecasting ROI-level fMRI time
 series and derived functional connectivity measures from Natural Scenes Dataset
 (NSD) scans.
@@ -7,7 +9,43 @@ series and derived functional connectivity measures from Natural Scenes Dataset
 The repository is intended to contain source code, notebooks used for the
 reported analyses, and instructions needed to reproduce figures and tables. NSD
 data are not included in this repository and must be downloaded separately under
-the applicable NSD data-use terms.
+the applicable NSD data-use terms. Code accompanying:
+
+> Bayer, A., Zhang, Z., Ipek, A.E., Khavari, R., Aazhang, B.
+> *Probabilistic Forecasting and Information-Theoretic Analysis of Multivariate fMRI Dynamics*.
+> Entropy, 2026.
+
+## Reproducibility
+
+The exact version of the code used in the manuscript is archived on Zenodo:
+
+https://doi.org/10.5281/zenodo.20341604
+
+
+## Citation
+
+```bibtex
+@article{bayer2026probabilistic,
+  title={Probabilistic Forecasting and Information-Theoretic Analysis of Multivariate fMRI Dynamics},
+  author={Bayer, Arda and Zhang, Zhiyao and Ipek, Ahmet Emre and Khavari, Rose and Aazhang, Behnaam},
+  journal={Entropy},
+  volume={28},
+  number={7},
+  pages={738},
+  year={2026},
+  publisher={MDPI}
+}
+
+@software{bayer2026fmri_forecasting,
+  author = {Bayer, Arda and Zhang, Zhiyao and Ipek, Ahmet Emre and Khavari, Rose and Aazhang, Behnaam},
+  title = {fMRI Forecasting},
+  year = {2026},
+  publisher = {Zenodo},
+  doi = {10.5281/zenodo.20341604},
+  url = {https://doi.org/10.5281/zenodo.20341604}
+}
+```
+
 
 ## Repository Contents
 
